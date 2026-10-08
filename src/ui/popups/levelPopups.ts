@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
-import { TEXTURES } from '../../assets/AssetManifest';
+import { TEXTURES, materialTexture } from '../../assets/AssetManifest';
+import type { MaterialId } from '../../config/economy';
 import { FONT_FAMILY } from '../../config/theme';
 import type { GoalDefinition, GoalState } from '../../core';
 import { t, type I18nKey } from '../../i18n';
@@ -114,10 +115,16 @@ function rewardChips(popup: Popup, scene: Phaser.Scene, y: number, chips: readon
 }
 
 /**
- * Kazanınca: yıldız, seviye ödülleri (yeni seviyede +1 yıldız ve +1 can) ve kazanılan altın
+ * Kazanınca: seviye ödülleri (yeni seviyede +1 yıldız, kasabaya malzeme, +1 can) ve kazanılan altın
  * çipler halinde; Kaptan'ın sevinci → "Devam" (kasabaya).
  */
-export function showWin(scene: Phaser.Scene, coins: number, stars: number, lives = 0): Promise<void> {
+export function showWin(
+  scene: Phaser.Scene,
+  coins: number,
+  stars: number,
+  lives = 0,
+  material: { readonly id: MaterialId; readonly amount: number } | null = null,
+): Promise<void> {
   return new Promise((resolve) => {
     const popup = new Popup(scene, {
       title: t('win.title'),
@@ -145,6 +152,7 @@ export function showWin(scene: Phaser.Scene, coins: number, stars: number, lives
     popup.content.add(label(scene, 0, -85, t('win.rewards'), 38));
     const chips: [string, string][] = [];
     if (stars > 0) chips.push([TEXTURES.star, `+${stars}`]);
+    if (material) chips.push([materialTexture(material.id), `+${material.amount}`]);
     if (lives > 0) chips.push([TEXTURES.heart, `+${lives}`]);
     chips.push([TEXTURES.coin, `+${coins}`]);
     rewardChips(popup, scene, 10, chips);

@@ -4,14 +4,13 @@ import { APP_VERSION } from '../../config/app';
 import { BOOSTER_IDS, ECONOMY, HELPER_IDS, type BoosterId, type DailyRewardConfig, type ItemId } from '../../config/economy';
 import { FONT_FAMILY } from '../../config/theme';
 import { getLevel } from '../../data/levels';
-import { getLanguage, t, type I18nKey, type Language } from '../../i18n';
+import { t, type I18nKey, type Language } from '../../i18n';
 import type { DailyReward } from '../../meta/DailyReward';
 import type { LevelReward } from '../../meta/levelRewards';
 import { inventory, lives } from '../../meta/progress';
 import { audio } from '../../services/Audio';
 import { settings } from '../../services/Settings';
 import { wallet } from '../../services/Wallet';
-import { saveService } from '../../services/SaveService';
 import { currentUser } from '../../net/account';
 import { dispatch, sync, type SyncStatus } from '../../net/sync';
 import { formatCountdown } from '../components/CounterPill';
@@ -21,6 +20,7 @@ import { showToast } from '../components/toast';
 import { Toggle } from '../components/Toggle';
 import { tweenAsync, waitMs } from '../tweens';
 import { INK, captainQuip, coinLine, goalsRow, label } from './levelPopups';
+import { bundleEntries } from './rewardViews';
 
 const RED = '#c0392b';
 const GOLD = '#b07800';
@@ -75,6 +75,7 @@ export function showBuyItem(scene: Phaser.Scene, id: ItemId, isSingle = false): 
         {
           label: t(isSingle ? 'buy.singleButton' : 'buy.button', { n: amount, cost }),
           variant: 'green',
+          icon: TEXTURES.coin,
           enabled: affordable,
           onClick: () => {
             if (!dispatch({ type: isSingle ? 'buySingleItem' : 'buyPack', item: id }).ok) return;
@@ -115,21 +116,22 @@ export function showLives(scene: Phaser.Scene): Promise<'refilled' | 'closed'> {
         ? []
         : [
             {
-              label: t('lives.refill', { cost: ECONOMY.lives.fullRefillCost }),
-              variant: 'green',
-              enabled: wallet.coins >= ECONOMY.lives.fullRefillCost,
+              label: t('lives.buyOne', { cost: ECONOMY.lives.refillCost }),
+              icon: TEXTURES.coin,
+              enabled: wallet.coins >= ECONOMY.lives.refillCost,
               onClick: () => {
-                if (!dispatch({ type: 'refillLives' }).ok) return;
+                if (!dispatch({ type: 'buyOneLife' }).ok) return;
                 audio.play('coin');
                 finish('refilled');
               },
             },
             {
-              label: '+1 Can (' + ECONOMY.lives.refillCost + ')', // Using hardcoded or simple string for +1 Can since we might not have a translation key
-              variant: 'orange',
-              enabled: wallet.coins >= ECONOMY.lives.refillCost,
+              label: t('lives.refill', { cost: ECONOMY.lives.fullRefillCost }),
+              variant: 'green',
+              icon: TEXTURES.coin,
+              enabled: wallet.coins >= ECONOMY.lives.fullRefillCost,
               onClick: () => {
-                if (!dispatch({ type: 'buyOneLife' }).ok) return;
+                if (!dispatch({ type: 'refillLives' }).ok) return;
                 audio.play('coin');
                 finish('refilled');
               },
@@ -246,9 +248,7 @@ export function showLevelStart(scene: Phaser.Scene, levelId: number): Promise<Bo
 
 /** Ödülün simgeleri ve miktarları (günlük ödül kartı). */
 function rewardIcons(scene: Phaser.Scene, reward: DailyRewardConfig, y: number, size: number): Phaser.GameObjects.GameObject[] {
-  const entries: [string, string][] = [];
-  if (reward.coins) entries.push([TEXTURES.coin, String(reward.coins)]);
-  for (const [id, n] of Object.entries(reward.items ?? {}) as [ItemId, number][]) entries.push([itemTexture(id), `×${n}`]);
+  const entries = bundleEntries(reward).map(([texture, amount]): [string, string] => [texture, amount.replace(/^\+/, '')]);
   const spacing = size * 1.05;
   return entries.flatMap(([texture, amount], i) => {
     const x = (i - (entries.length - 1) / 2) * spacing;
@@ -394,336 +394,6 @@ export function showDailyReward(scene: Phaser.Scene, daily: DailyReward): Promis
   });
 }
 
-/** Mağaza: altın paketleri; RevenueCat üzerinden gerçek ödeme kullanır. */
-export function showShop(scene: Phaser.Scene): Promise<void> {
-  return new Promise((resolve) => {
-    const popup = new Popup(scene, {
-      title: t('shop.title'),
-      width: 960,
-      height: 2900,
-      onClose: () => void popup.close().then(resolve),
-    });
-    coinLine(popup, scene, -480, t('coins.balance', { n: wallet.coins }));
-    const language: Language = getLanguage();
-    
-    // Yükleniyor durumu (Opsiyonel olarak eklenebilir)
-    ECONOMY.shop.forEach((pack, i) => {
-      const x = (i % 2 === 0 ? -1 : 1) * 215;
-      const y = -290 + Math.floor(i / 2) * 290;
-      const card = scene.add.container(x, y);
-      const bg = scene.add.graphics();
-      bg.fillStyle(0xffffff, 0.75).fillRoundedRect(-200, -135, 400, 270, 26);
-      bg.lineStyle(4, pack.tag ? 0xf0a000 : 0xd9a066).strokeRoundedRect(-200, -135, 400, 270, 26);
-      card.add(bg);
-      const pile = Math.min(5, i + 1);
-      for (let c = 0; c < pile; c++) {
-        const cx = (c - (pile - 1) / 2) * 34;
-        const cy = -55 - (c % 2) * 14;
-        card.add(scene.add.image(cx, cy, TEXTURES.coin).setDisplaySize(78, 78));
-      }
-      card.add(
-        scene.add
-          .text(0, 15, pack.coins.toLocaleString(language === 'tr' ? 'tr-TR' : 'en-US'), {
-            fontFamily: FONT_FAMILY,
-            fontSize: '46px',
-            fontStyle: '700',
-            color: GOLD,
-          })
-          .setOrigin(0.5),
-      );
-      
-      let storeProduct: any = null;
-
-      const button = new TextButton(
-        scene,
-        0,
-        85,
-        pack.price[language], // Fallback fiyat, eğer RevenueCat yüklenemezse gösterilir
-        async () => {
-          try {
-            const { Purchases } = await import('@revenuecat/purchases-capacitor');
-            
-            const platform = (window as any).Capacitor?.getPlatform();
-            if (platform === 'android' || platform === 'ios') {
-               const isConfigured = await Purchases.isConfigured();
-               if (!isConfigured.isConfigured) {
-                  const apiKey = platform === 'android' ? 'goog_KEY_GIRIN' : 'appl_KEY_GIRIN';
-                  await Purchases.configure({ apiKey });
-               }
-            }
-            
-            if (!storeProduct) {
-               const products = await Purchases.getProducts({ productIdentifiers: [pack.id] });
-               if (products.products.length > 0) {
-                 storeProduct = products.products[0];
-               } else {
-                 throw new Error('Product not found in store');
-               }
-            }
-            
-            const { customerInfo } = await Purchases.purchaseStoreProduct({ product: storeProduct });
-            if (customerInfo) {
-               dispatch({ type: 'buyCoinsPack', coins: pack.coins });
-               showToast(scene, t('daily.quip')); 
-               void popup.close().then(resolve);
-            }
-          } catch (err: any) {
-            if (err.code === 'USER_CANCELLED') {
-              // Kullanıcı iptal etti, uyarıya gerek yok.
-            } else {
-              console.error(err);
-              showToast(scene, t('shop.note'));
-            }
-          }
-        },
-        { width: 250, height: 80, fontSize: 34, variant: 'green' }
-      );
-      card.add(button);
-      
-      // Dinamik Fiyat Yükleme: Arka planda RevenueCat'ten mağaza fiyatlarını çeker.
-      (async () => {
-        try {
-          const { Purchases } = await import('@revenuecat/purchases-capacitor');
-          const platform = (window as any).Capacitor?.getPlatform();
-          if (platform === 'android' || platform === 'ios') {
-             const isConfigured = await Purchases.isConfigured();
-             if (!isConfigured.isConfigured) {
-                const apiKey = platform === 'android' ? 'goog_KEY_GIRIN' : 'appl_KEY_GIRIN';
-                await Purchases.configure({ apiKey });
-             }
-             const response = await Purchases.getProducts({ productIdentifiers: [pack.id] });
-             if (response.products && response.products.length > 0 && response.products[0].priceString) {
-                storeProduct = response.products[0];
-                button.setLabel(storeProduct.priceString);
-             }
-          }
-        } catch (e) {
-          // Çevrimdışıysa veya ayarlanmadıysa fallback metniyle kalır.
-        }
-      })();
-      if (pack.tag) {
-        const tag = scene.add
-          .text(-180, -135, t(pack.tag === 'popular' ? 'shop.popular' : 'shop.best'), {
-            fontFamily: FONT_FAMILY,
-            fontSize: '28px',
-            fontStyle: '700',
-            color: '#ffffff',
-            backgroundColor: '#e74c3c',
-            padding: { x: 14, y: 6 },
-          })
-          .setOrigin(0, 0.5)
-          .setAngle(-6);
-        card.add(tag);
-      }
-      popup.content.add(card);
-    });
-
-    // --- CHESTS SECTION ---
-    popup.content.add(label(scene, 0, 520, t('shop.chests'), 46, GOLD));
-    Object.values(ECONOMY.chests).forEach((chest, i) => {
-      const x = (i % 2 === 0 ? -1 : 1) * 215;
-      const y = 690 + Math.floor(i / 2) * 290;
-      const card = scene.add.container(x, y);
-      
-      const bg = scene.add.graphics();
-      bg.fillStyle(0xffffff, 0.75).fillRoundedRect(-200, -135, 400, 270, 26);
-      bg.lineStyle(4, 0xd9a066).strokeRoundedRect(-200, -135, 400, 270, 26);
-      card.add(bg);
-      
-      card.add(scene.add.image(0, -40, obstacleTexture('chest', 1)).setDisplaySize(120, 120));
-      
-      const button = new TextButton(
-        scene,
-        0,
-        85,
-        t('chest.buy', { cost: chest.priceGold }),
-        () => {
-          if (wallet.coins >= chest.priceGold) {
-            const cmd = dispatch({ type: 'buyChest', chestId: chest.id });
-            if (cmd.ok) {
-              audio.play('chest');
-              showToast(scene, t('chest.rewardDesc', { n: chest.guaranteedMaterial }));
-              // Optional: animate chest or something
-            }
-          } else {
-            showToast(scene, t('lose.cantAfford'));
-          }
-        },
-        { width: 250, height: 80, fontSize: 34, variant: 'green' }
-      );
-      card.add(button);
-      popup.content.add(card);
-    });
-
-    // --- SHIP UPGRADES SECTION ---
-    popup.content.add(label(scene, 0, 1160, t('shop.upgrades'), 46, GOLD));
-    const upgrades = Object.values(ECONOMY.shipUpgrades);
-    upgrades.forEach((upgrade: any, i: number) => {
-      const x = (i % 2 === 0 ? -1 : 1) * 215;
-      const y = 1330 + Math.floor(i / 2) * 290;
-      const card = scene.add.container(x, y);
-      
-      const bg = scene.add.graphics();
-      bg.fillStyle(0xffffff, 0.75).fillRoundedRect(-200, -135, 400, 270, 26);
-      bg.lineStyle(4, 0x4a90e2).strokeRoundedRect(-200, -135, 400, 270, 26);
-      card.add(bg);
-      
-      card.add(label(scene, 0, -90, upgrade.name, 36, '#4a90e2'));
-      
-      // Determine current level
-      // Note: save data might not be exposed directly in economyPopups without importing game state
-      // We will handle that by dispatching and catching if it's max level.
-      // But it's better to get the current level if possible. In economyPopups we don't have direct access to save state easily without importing `saveService`.
-      const currentLevel = saveService.data.ship[upgrade.id] || 0;
-      const isMax = currentLevel >= upgrade.maxLevel;
-      const nextLevelConfig = isMax ? null : upgrade.levels.find((l: any) => l.level === currentLevel + 1);
-
-      const labelText = isMax 
-        ? t('upgrade.max') 
-        : t('upgrade.buy', { gold: nextLevelConfig?.costGold || 0, mat: nextLevelConfig?.costMaterial || 0 });
-
-      const button = new TextButton(
-        scene,
-        0,
-        60,
-        labelText,
-        () => {
-          if (isMax) {
-            showToast(scene, t('upgrade.max'));
-            return;
-          }
-          const cmd = dispatch({ type: 'buyShipUpgrade', upgradeId: upgrade.id });
-          if (cmd.ok) {
-            audio.play('coin');
-            showToast(scene, 'Upgrade successful!');
-            popup.close().then(() => showShop(scene)); // Reload to refresh prices
-          } else {
-            showToast(scene, cmd.reason === 'max-level' ? t('upgrade.max') : t('lose.cantAfford'));
-          }
-        },
-        { width: 300, height: 75, fontSize: 30, variant: 'orange' }
-      );
-      card.add(button);
-      
-      // Icon
-      card.add(scene.add.image(0, -15, itemTexture('helm')).setDisplaySize(80, 80));
-      
-      popup.content.add(card);
-    });
-
-    // --- PIGGY BANK SECTION ---
-    const piggy = saveService.data.piggyBank?.coins || 0;
-    const piggyMax = ECONOMY.piggyBank.maxCoins;
-    const piggyPrice = ECONOMY.piggyBank.priceGold; // Or IAP price string
-    const isPiggyFull = piggy >= piggyMax;
-
-    popup.content.add(label(scene, 0, 1850, 'Piggy Bank', 46, GOLD));
-    
-    const piggyCard = scene.add.container(0, 2070);
-    const piggyBg = scene.add.graphics();
-    piggyBg.fillStyle(0xffffff, 0.75).fillRoundedRect(-300, -150, 600, 300, 26);
-    piggyBg.lineStyle(4, isPiggyFull ? 0x2e8b3d : 0xd9a066).strokeRoundedRect(-300, -150, 600, 300, 26);
-    piggyCard.add(piggyBg);
-    
-    // Title & amount
-    piggyCard.add(label(scene, 0, -100, `${piggy} / ${piggyMax}`, 42, isPiggyFull ? '#2e8b3d' : '#8a5a00'));
-    
-    // Visual
-    piggyCard.add(scene.add.image(0, -10, TEXTURES.coin).setDisplaySize(100, 100));
-
-    // Buy Button
-    const piggyBtn = new TextButton(
-      scene,
-      0,
-      85,
-      isPiggyFull ? `Break · ${piggyPrice} Gold` : 'Not Full',
-      () => {
-        if (!isPiggyFull) {
-          showToast(scene, 'Piggy Bank is not full yet!');
-          return;
-        }
-        if (wallet.coins < piggyPrice) {
-          showToast(scene, t('lose.cantAfford'));
-          return;
-        }
-        // In a real scenario, breaking costs real money. Here we use Gold or just "break it"
-        // Wait, if breaking costs Gold, but it gives Gold... It gives 2000 gold for 250 gold! That's the offer.
-        // But our command currently just empties it and gives gold without charging.
-        // Let's modify the command to charge gold if we want, or just assume it's free in this simulation because `commands.ts` just adds `piggy` to `coins`.
-        const cmd = dispatch({ type: 'buyPiggyBank' });
-        if (cmd.ok) {
-          audio.play('coin');
-          showToast(scene, 'Piggy Bank Broken!');
-          popup.close().then(() => showShop(scene)); // Refresh
-        } else {
-          showToast(scene, 'Error');
-        }
-      },
-      { width: 350, height: 80, fontSize: 34, variant: isPiggyFull ? 'green' : 'orange' } // Fallback to orange as a default
-    );
-    // Note: TextButton doesn't support disabled visually out of box, we just block the click.
-    piggyCard.add(piggyBtn);
-    popup.content.add(piggyCard);
-
-    void popup.open();
-  });
-}
-
-/** Şans çarkı popup'ı (Basit Gacha gösterimi) */
-export function showLuckySpin(scene: Phaser.Scene): Promise<void> {
-  return new Promise((resolve) => {
-    const chest = ECONOMY.chests['lucky_spin'];
-    const popup = new Popup(scene, {
-      title: 'Lucky Spin',
-      width: 720,
-      height: 900,
-      onClose: () => void popup.close().then(resolve),
-    });
-
-    coinLine(popup, scene, -250, t('coins.balance', { n: wallet.coins }));
-
-    // Wheel/Spin visual representation
-    const wheel = scene.add.image(0, 50, TEXTURES.star).setDisplaySize(300, 300);
-    popup.content.add(wheel);
-
-    // Spin button
-    const spinBtn = new TextButton(
-      scene,
-      0,
-      280,
-      `Spin · ${chest.priceGold}`,
-      () => {
-        if (wallet.coins < chest.priceGold) {
-          showToast(scene, t('lose.cantAfford'));
-          return;
-        }
-
-        const cmd = dispatch({ type: 'buyChest', chestId: 'lucky_spin' });
-        if (cmd.ok) {
-          audio.play('chest');
-          
-          // Spin animation
-          scene.tweens.add({
-            targets: wheel,
-            angle: 360 * 5 + Math.random() * 360,
-            duration: 2000,
-            ease: 'Cubic.easeOut',
-            onComplete: () => {
-              coinLine(popup, scene, -250, t('coins.balance', { n: wallet.coins }));
-              showToast(scene, `Won ${chest.guaranteedMaterial} Materials!`);
-              // You can expand this to show visual drops of gold/boosters based on random chance
-            }
-          });
-        }
-      },
-      { width: 320, height: 90, fontSize: 40, variant: 'orange' }
-    );
-    popup.content.add(spinBtn);
-
-    void popup.open();
-  });
-}
-
 /** Eşitleme durumunun metni ve rengi (ayarlardaki hesap bölümü). */
 function syncStatusText(status: SyncStatus): [string, string] {
   if (sync.pending > 0 && status !== 'syncing') return [t('account.pending', { n: sync.pending }), '#b07800'];
@@ -740,18 +410,18 @@ function syncStatusText(status: SyncStatus): [string, string] {
 }
 
 /**
- * Ayarlar: ses, müzik, titreşim, dil ve hesap (ad, e-posta, eşitleme durumu, çıkış).
+ * Ayarlar: ses, müzik, titreşim, dil ve hesap (ad, e-posta, eşitleme durumu, çıkış, kaydı sıfırlama).
  * 'language': dil değişti (çağıran sahne metinleri yenilemek için kendini yeniden başlatır);
- * 'logout': oyuncu çıkış istedi; null: kapatıldı.
+ * 'logout': oyuncu çıkış istedi; 'reset': kaydı sıfırlamak istedi (onay ayrıca sorulur); null: kapatıldı.
  */
-export function showSettings(scene: Phaser.Scene): Promise<'language' | 'logout' | null> {
+export function showSettings(scene: Phaser.Scene): Promise<'language' | 'logout' | 'reset' | null> {
   return new Promise((resolve) => {
     let stopListening = () => undefined as unknown;
-    const finish = (result: 'language' | 'logout' | null) => {
+    const finish = (result: 'language' | 'logout' | 'reset' | null) => {
       stopListening();
       void popup.close().then(() => resolve(result));
     };
-    const popup = new Popup(scene, { title: t('settings.title'), height: 1240, onClose: () => finish(null) });
+    const popup = new Popup(scene, { title: t('settings.title'), height: 1360, onClose: () => finish(null) });
     const rows = [
       ['settings.sound', 'sound'],
       ['settings.music', 'music'],
@@ -801,9 +471,32 @@ export function showSettings(scene: Phaser.Scene): Promise<'language' | 'logout'
     showStatus(sync.state);
     stopListening = sync.onStatus(showStatus);
     popup.content.add(
-      new TextButton(scene, 0, 430, t('account.logout'), () => finish('logout'), { width: 380, height: 96, fontSize: 38 }),
+      new TextButton(scene, -195, 430, t('account.logout'), () => finish('logout'), { width: 370, height: 96, fontSize: 36 }),
     );
-    popup.content.add(label(scene, 0, 545, t('settings.version', { v: APP_VERSION }), 28, '#8a7a6a'));
+    popup.content.add(
+      new TextButton(scene, 195, 430, t('account.reset'), () => finish('reset'), { width: 370, height: 96, fontSize: 36 }),
+    );
+    popup.content.add(label(scene, 0, 530, t('account.resetHint'), 26, '#8a7a6a', 720));
+    popup.content.add(label(scene, 0, 610, t('settings.version', { v: APP_VERSION }), 28, '#8a7a6a'));
+    void popup.open();
+  });
+}
+
+/** Geri alınamaz işlem onayı (kaydı sıfırlama). Onaylanırsa true. */
+export function showConfirm(scene: Phaser.Scene, options: { title: string; message: string; confirm: string }): Promise<boolean> {
+  return new Promise((resolve) => {
+    const finish = (value: boolean) => void popup.close().then(() => resolve(value));
+    const popup = new Popup(scene, {
+      title: options.title,
+      height: 780,
+      onClose: () => finish(false),
+      buttons: [
+        { label: t('reset.cancel'), variant: 'green', onClick: () => finish(false) },
+        { label: options.confirm, onClick: () => finish(true) },
+      ],
+    });
+    popup.content.add(scene.add.image(0, -170, TEXTURES.captain).setDisplaySize(170, 170));
+    popup.content.add(label(scene, 0, 30, options.message, 36, RED, 700));
     void popup.open();
   });
 }

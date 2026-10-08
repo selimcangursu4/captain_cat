@@ -18,6 +18,11 @@ export class Random {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   }
 
+  /** Üretecin şu anki durumu: aynı sayıyla yeni bir Random kaldığı yerden devam eder. */
+  snapshot(): number {
+    return this.state;
+  }
+
   /** [0, maxExclusive) aralığında tam sayı. */
   int(maxExclusive: number): number {
     return Math.floor(this.next() * maxExclusive);

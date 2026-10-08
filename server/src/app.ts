@@ -1,11 +1,14 @@
 /// <reference types="node" />
+import { randomBytes, randomUUID } from 'node:crypto';
 import cors from '@fastify/cors';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { isValidEmail, isValidName, isValidPassword, normalizeEmail, normalizeName } from '../../src/meta/accountRules';
 import { applyCommand, parseCommand } from '../../src/meta/commands';
 import { createGame } from '../../src/meta/game';
+import { applyPurchase, productGrant } from '../../src/meta/purchases';
 import { MemorySaveStorage, SaveService, defaultSave } from '../../src/services/SaveService';
 import type { LevelCatalog } from './levels';
+import type { PurchaseVerifier } from './purchases';
 import { RateLimiter, dummyPasswordHash, hashPassword, hashToken, newToken, verifyPassword } from './security';
 import { EmailTakenError, type EventRecord, type Store, type UserRecord } from './store';
 
@@ -18,6 +21,10 @@ export interface AppOptions {
   /** Kayıt (IP başına saatte) ve giriş (IP+e-posta başına 10 dakikada) deneme sınırları. */
   readonly registerPerHour?: number;
   readonly loginPer10Min?: number;
+  /** Gerçek ödemeleri doğrulayan (RevenueCat); yoksa gerçek satın alma kabul edilmez. */
+  readonly purchaseVerifier?: PurchaseVerifier | null;
+  /** Doğrulamasız deneme alımlarına izin (yalnızca geliştirme). */
+  readonly sandboxPurchases?: boolean;
   readonly now?: () => number;
   readonly logger?: boolean;
 }
@@ -41,6 +48,9 @@ const MAX_COMMANDS = 500;
 const TOUCH_INTERVAL_MS = 60 * 60_000;
 
 const publicUser = (u: UserRecord) => ({ id: u.id, email: u.email, displayName: u.displayName });
+
+/** Kayıt sunucudan okunur (eski sürüm kayıtlar da güncel biçime çevrilir). */
+const loadSave = (data: unknown) => new SaveService(new MemorySaveStorage(JSON.stringify(data ?? null)));
 
 export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   const { store, catalog } = options;
@@ -115,7 +125,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       if (!isValidName(displayName)) throw new HttpError(400, 'invalid_input', 'Kaptan adı 3-16 karakter olmalı');
       let user: UserRecord;
       try {
-        user = await store.createUser({ email, displayName, passwordHash: await hashPassword(password) }, defaultSave());
+        // Her hesabın sandık tohumu farklı: çekilişler hesaplar arasında aynı sırayla gelmesin.
+        const save = defaultSave(randomBytes(4).readUInt32LE(0));
+        user = await store.createUser({ email, displayName, passwordHash: await hashPassword(password) }, save);
       } catch (error) {
         if (error instanceof EmailTakenError) throw new HttpError(409, 'email_taken', error.message);
         throw error;
@@ -152,7 +164,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   app.get('/save', async (request) => {
     const { userId } = await requireUser(request);
     const record = await store.getSave(userId);
-    return { revision: record?.revision ?? 0, save: new SaveService(new MemorySaveStorage(JSON.stringify(record?.data ?? null))).data };
+    return { revision: record?.revision ?? 0, save: loadSave(record?.data).data };
   });
 
   /**
@@ -180,7 +192,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       const rules = catalog.rules(options.devCommands);
       for (let attempt = 0; attempt < 5; attempt++) {
         const record = (await store.getSave(userId)) ?? { data: null, revision: 0 };
-        const save = new SaveService(new MemorySaveStorage(JSON.stringify(record.data)));
+        const save = loadSave(record.data);
         const game = createGame(save, () => catalog.count);
         const time = now();
         const results: { ok: boolean; reason?: string }[] = [];
@@ -202,9 +214,73 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
           });
         }
         const changed = results.some((r) => r.ok);
+        // Kaydın saati sunucu saatine ilerler: sonraki inşaatlar bu andan geriye başlatılamaz.
+        if (changed && save.data.clock < time) save.update((d) => void (d.clock = time));
         if (changed && !(await store.writeSave(userId, record.revision, save.data))) continue; // başka istek yazdı: yeniden dene
         await store.logEvents(userId, events);
         return { revision: changed ? record.revision + 1 : record.revision, save: save.data, results };
+      }
+      throw new HttpError(409, 'conflict', 'Kayıt aynı anda değişti, tekrar deneyin');
+    },
+  );
+
+  /**
+   * Gerçek parayla satın alma. İstemci mağazadan (RevenueCat) satın aldıktan sonra işlem kimliğini
+   * gönderir; sunucu ödemeyi RevenueCat'ten doğrular, ürünü esas kayda işler ve işlemi kaydeder.
+   * Aynı işlem tekrar gelirse (yeniden deneme) ikinci kez altın verilmez ('duplicate').
+   * sandbox: geliştirmede mağaza olmadan deneme (yalnızca sandboxPurchases açıksa).
+   */
+  app.post<{ Body: { productId: string; transactionId?: string; sandbox?: boolean } }>(
+    '/purchases',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['productId'],
+          properties: {
+            productId: { type: 'string', maxLength: 128 },
+            transactionId: { type: 'string', maxLength: 256 },
+            sandbox: { type: 'boolean' },
+          },
+        },
+      },
+    },
+    async (request) => {
+      const { userId } = await requireUser(request);
+      const { productId, sandbox = false } = request.body;
+      if (!productGrant(productId)) throw new HttpError(400, 'unknown_product', 'Bilinmeyen ürün');
+      let transactionId: string;
+      if (sandbox) {
+        if (!options.sandboxPurchases) throw new HttpError(403, 'sandbox_disabled', 'Deneme alımları kapalı');
+        transactionId = `sandbox-${randomUUID()}`;
+      } else {
+        transactionId = request.body.transactionId?.trim() ?? '';
+        if (!transactionId) throw new HttpError(400, 'invalid_input', 'İşlem kimliği gerekli');
+        if (!options.purchaseVerifier) throw new HttpError(503, 'store_unavailable', 'Ödeme doğrulaması yapılandırılmadı');
+        let valid: boolean;
+        try {
+          valid = await options.purchaseVerifier.verify(userId, productId, transactionId);
+        } catch (error) {
+          app.log.error(error);
+          throw new HttpError(502, 'store_error', 'Ödeme şu an doğrulanamadı');
+        }
+        if (!valid) throw new HttpError(402, 'purchase_invalid', 'Ödeme doğrulanamadı');
+      }
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const record = (await store.getSave(userId)) ?? { data: null, revision: 0 };
+        const save = loadSave(record.data);
+        const coins = applyPurchase(save, productId) ?? 0;
+        const outcome = await store.recordPurchase(userId, { transactionId, productId, coins, sandbox }, record.revision, save.data);
+        if (outcome === 'conflict') continue; // başka istek kaydı değiştirdi: yeniden dene
+        if (outcome === 'duplicate') {
+          const current = (await store.getSave(userId)) ?? { data: null, revision: 0 };
+          return { coins: 0, duplicate: true, revision: current.revision, save: loadSave(current.data).data };
+        }
+        await store.logEvents(userId, [
+          { type: 'purchase', payload: { productId, transactionId, coins, sandbox }, clientAt: new Date(now()), accepted: true },
+        ]);
+        return { coins, duplicate: false, revision: record.revision + 1, save: save.data };
       }
       throw new HttpError(409, 'conflict', 'Kayıt aynı anda değişti, tekrar deneyin');
     },

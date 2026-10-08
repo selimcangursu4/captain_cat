@@ -21,6 +21,7 @@ model User {
   sessions     Session[]
   save         GameSave?
   events       GameEvent[]
+  purchases    Purchase[]
 }
 
 /// Oturum: istemcideki belirtecin SHA-256 özeti (belirtecin kendisi saklanmaz).
@@ -61,6 +62,22 @@ model GameEvent {
   accepted  Boolean
   reason    String?
   createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+/// Gerçek parayla yapılan satın almalar. Mağaza işlem kimliği tektir: aynı ödeme iki kez işlenmez.
+model Purchase {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @db.Uuid
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactionId String   @unique
+  productId     String
+  /// Kayda işlenen altın.
+  coins         Int
+  /// Geliştirme ortamında doğrulamasız (deneme) alım.
+  sandbox       Boolean  @default(false)
+  createdAt     DateTime @default(now())
 
   @@index([userId, createdAt])
 }

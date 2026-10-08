@@ -10,6 +10,8 @@ export interface PopupButton {
   readonly onClick: () => void;
   readonly variant?: 'orange' | 'green';
   readonly enabled?: boolean;
+  /** Yazının sağında simge (fiyat). */
+  readonly icon?: string;
 }
 
 export interface PopupOptions {
@@ -76,6 +78,7 @@ export class Popup {
         height: 110,
         fontSize: buttonWidth < 280 ? 34 : buttonWidth < 330 ? 38 : 44,
         variant: b.variant,
+        icon: b.icon,
       });
       if (b.enabled === false) button.setEnabled(false);
       this.panel.add(button);

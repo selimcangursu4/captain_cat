@@ -1,61 +1,82 @@
 import Phaser from 'phaser';
-import { TEXTURES, obstacleTexture, townPartTexture } from '../assets/AssetManifest';
+import { TEXTURES, materialTexture, obstacleTexture, townPartTexture } from '../assets/AssetManifest';
 import { ensureTextures } from '../assets/loadAssets';
 import { HOME } from '../config/layout';
+import { LEVEL_REWARDS } from '../config/levels';
 import { FONT_FAMILY, UI_COLORS } from '../config/theme';
 import { t, type I18nKey } from '../i18n';
+import { levelReward, nextChestLevel } from '../meta/levelRewards';
 import { dailyReward, levelProgress, lives, townProgress } from '../meta/progress';
-import { type TownRegion, type TownTask } from '../meta/town';
+import { TOWN, getTask, recipeEntries, type TownRegion, type TownTask } from '../meta/town';
+import type { FinishResult } from '../meta/TownProgress';
+import { logout } from '../net/account';
+import { retryPendingPurchases } from '../net/purchases';
+import { dispatch } from '../net/sync';
 import { audio } from '../services/Audio';
 import { saveService } from '../services/SaveService';
-import { createCaptainBubble } from '../ui/components/CaptainBubble';
+import { CAPTAIN_BUBBLE_HEIGHT, createCaptainBubble } from '../ui/components/CaptainBubble';
 import { CounterPill, LivesPill, formatCountdown } from '../ui/components/CounterPill';
 import { IconButton } from '../ui/components/IconButton';
 import { TextButton } from '../ui/components/TextButton';
+import { showToast } from '../ui/components/toast';
 import { flyIcons } from '../ui/effects/celebrate';
 import { OceanBackground } from '../ui/effects/OceanBackground';
-import { SagaMapView } from '../ui/home/SagaMapView';
-import { showDesignPicker, showRegionChest, showTaskList, showMissingMaterialBuy } from '../ui/home/townPopups';
-import { ECONOMY } from '../config/economy';
-import { showDailyReward, showLevelChest, showLives, showSettings, showShop, showLuckySpin } from '../ui/popups/economyPopups';
-import { LEVEL_REWARDS } from '../config/levels';
-import { levelReward, nextChestLevel } from '../meta/levelRewards';
+import { formatClock, formatDuration, formatNumber } from '../ui/format';
+import { RegionView } from '../ui/home/RegionView';
+import { TownMapView, type RegionStatus } from '../ui/home/TownMapView';
+import { showBuildPopup, showConstruction, showDesignPicker, showRegionChest, showTaskList, taskName } from '../ui/home/townPopups';
+import { showConfirm, showDailyReward, showLevelChest, showLives, showSettings } from '../ui/popups/economyPopups';
 import { prepareLevelStart } from '../ui/popups/levelStart';
-import { showToast } from '../ui/components/toast';
-import { logout } from '../net/account';
-import { dispatch } from '../net/sync';
-import type { BuildResult } from '../meta/TownProgress';
+import { showMarket, showShop, type MarketTab } from '../ui/popups/marketPopups';
 import { waitMs } from '../ui/tweens';
 import { SCENES, fadeInScene, goToScene, type GameSceneData, type HomeSceneData } from './keys';
 
 const DEPTH = { ui: 20, bubble: 60 } as const;
 const GIFT_BAR = { width: 380, height: 40 } as const;
+const CARD = { width: 880, height: 150 } as const;
 
+/**
+ * Ana ekran (kasaba): can, yıldız ve altın; liman haritası (bölgeler ve ilerleme) ya da seçilen
+ * bölgenin sahnesi (yapılan parçalar ve süren inşaat; ◀ Harita ile geri dönülür),
+ * sıradaki görev kartı, "Oyna", Mağaza (altın), Pazar (malzeme, yıldız, sandık, gemi) ve ayarlar.
+ * Görev: malzemelerle inşaat başlar, süre dolunca biter (ya da altınla hızlandırılır); bölgenin bütün
+ * inşaatları bitince sıradaki bölge açılır.
+ */
 export class HomeScene extends Phaser.Scene {
   private background!: OceanBackground;
-  private sagaMap!: SagaMapView;
+  private region!: RegionView;
+  private map!: TownMapView;
+  /** Ana ekran haritayı mı, bir bölgenin sahnesini mi gösteriyor. */
+  private mode: 'map' | 'region' = 'map';
+  private mapButton!: TextButton;
   private lives!: LivesPill;
   private stars!: CounterPill;
   private coins!: CounterPill;
   private shopButton!: IconButton;
+  private marketButton!: IconButton;
   private settingsButton!: IconButton;
   private title!: Phaser.GameObjects.Text;
   private progressText!: Phaser.GameObjects.Text;
   private taskCard!: Phaser.GameObjects.Container;
+  /** Görev kartındaki canlı geri sayım ve hızlandırma bedeli (inşaat sürerken). */
+  private cardTimer: { text: Phaser.GameObjects.Text; bar: Phaser.GameObjects.Graphics; cost: TextButton } | null = null;
+  private cardKey = '';
   private tasksButton!: TextButton;
   private tasksBadge!: Phaser.GameObjects.Container;
   private playButton!: TextButton;
-  private devButtons: TextButton[] = [];
+  /** Görüntülenen bölge (geçmiş bölgelere bakılabilir). */
   private viewIndex = 0;
   private busy = false;
   private starsEarned = 0;
+  /** Sayaca uçmakta olan (henüz gösterilmeyen) yıldızlar. */
   private starsInFlight = 0;
+  /** Bölümden dönülürken açılacak seviye sandığı. */
   private chestLevel: number | null = null;
   private giftRow!: Phaser.GameObjects.Container;
   private giftFill!: Phaser.GameObjects.Graphics;
   private giftText!: Phaser.GameObjects.Text;
+  /** Altınlar sayaca uçarken gösterilen değer (null: kayıttaki gerçek değer). */
   private coinDisplay: number | null = null;
-  private spinButton!: IconButton;
 
   constructor() {
     super(SCENES.home);
@@ -67,32 +88,40 @@ export class HomeScene extends Phaser.Scene {
     this.starsInFlight = 0;
     this.coinDisplay = null;
     this.busy = false;
-    this.devButtons = [];
+    this.mode = 'map';
+    this.cardTimer = null;
+    this.cardKey = '';
   }
 
   create(): void {
     fadeInScene(this);
     this.background = new OceanBackground(this);
-    this.sagaMap = new SagaMapView(this, DEPTH.ui - 5, townProgress, (region) => { void this.openTasksForRegion(region); });
-    
+    this.region = new RegionView(
+      this,
+      DEPTH.ui,
+      (taskId) => {
+        const task = getTask(taskId);
+        if (task && !this.busy) void this.changeDesign(task);
+      },
+      () => void this.openConstruction(),
+    );
+    this.map = new TownMapView(this, DEPTH.ui, (region, status) => void this.onMapTap(region, status));
     this.lives = new LivesPill(this, DEPTH.ui, () => void this.runPopup(() => showLives(this)));
-    this.stars = new CounterPill(this, TEXTURES.star, DEPTH.ui);
+    this.stars = new CounterPill(this, TEXTURES.star, DEPTH.ui, { plus: true, onTap: () => void this.openMarket('stars') });
     this.coins = new CounterPill(this, TEXTURES.coin, DEPTH.ui, { plus: true, onTap: () => void this.runPopup(() => showShop(this)) });
     const iconOptions = { size: HOME.iconButtonSize };
     this.shopButton = new IconButton(this, 0, 0, TEXTURES.shop, () => void this.runPopup(() => showShop(this)), {
       ...iconOptions,
       label: t('home.shop'),
     }).setDepth(DEPTH.ui);
+    this.marketButton = new IconButton(this, 0, 0, TEXTURES.market, () => void this.openMarket('materials'), {
+      ...iconOptions,
+      label: t('home.market'),
+    }).setDepth(DEPTH.ui);
     this.settingsButton = new IconButton(this, 0, 0, TEXTURES.gear, () => void this.openSettings(), {
       ...iconOptions,
       label: t('home.settings'),
     }).setDepth(DEPTH.ui);
-    this.spinButton = new IconButton(this, 0, 0, TEXTURES.star, () => void this.runPopup(() => showLuckySpin(this)), {
-      ...iconOptions,
-      label: 'Spin!',
-    }).setDepth(DEPTH.ui);
-    
-    // Yükseklik ve yerleşim hesaplamaları için map node'larından bağımsız, title vb ekran tepesinde kalacak.
     this.title = this.add
       .text(0, 0, '', {
         fontFamily: FONT_FAMILY,
@@ -117,7 +146,7 @@ export class HomeScene extends Phaser.Scene {
       .setDepth(DEPTH.ui);
     this.taskCard = this.add.container(0, 0).setDepth(DEPTH.ui);
     this.tasksButton = new TextButton(this, 0, 0, t('home.tasks'), () => void this.openTasks(), {
-      width: 420,
+      width: 360,
       height: 110,
       fontSize: 46,
     }).setDepth(DEPTH.ui);
@@ -128,8 +157,11 @@ export class HomeScene extends Phaser.Scene {
       fontSize: 60,
       variant: 'green',
     }).setDepth(DEPTH.ui);
-    
-    if (import.meta.env.DEV) this.createDevPanel();
+    this.mapButton = new TextButton(this, 0, 0, t('map.back'), () => void this.backToMap(), {
+      width: 250,
+      height: 92,
+      fontSize: 38,
+    }).setDepth(DEPTH.ui + 1);
 
     const stopListening = saveService.onChange(() => this.refreshCounters(true));
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
@@ -138,45 +170,57 @@ export class HomeScene extends Phaser.Scene {
     });
     this.scale.on(Phaser.Scale.Events.RESIZE, this.layout, this);
 
-    this.time.addEvent({ delay: 1000, loop: true, callback: () => this.refreshLives() });
+    // Can ve inşaat zamanlayıcıları her saniye güncellenir; inşaat süresi dolunca kendiliğinden biter.
+    this.time.addEvent({ delay: 1000, loop: true, callback: () => this.tick() });
     audio.playMusic('home');
 
     this.viewIndex = townProgress.unlockedRegions.length - 1;
+    // Bölümde kazanılan yıldız ve seviye sandığının altını sayaçlara uçarak eklenecek;
+    // o zamana kadar eski değerler görünür.
     this.starsInFlight = this.starsEarned;
     if (this.chestLevel !== null) this.coinDisplay = saveService.data.coins - levelReward(this.chestLevel).coins;
     this.createGiftRow();
     this.layout();
     this.refreshCounters(false);
-    void this.showRegion().then(() => this.welcome());
+    void retryPendingPurchases();
+    void this.showMap().then(() => this.welcome());
   }
+
+  // ───────────────────────── yerleşim ─────────────────────────
 
   private layout(): void {
     const { width, height } = this.scale;
     const cx = width / 2;
     this.background.layout(width, height);
+    // Uzun ekranlarda fazladan boşluk sahnenin üstüne ve altına paylaştırılır.
     const extra = Math.max(0, height - HOME.referenceHeight);
     const top = HOME.topBarY + extra * 0.15;
+    // Sayaçların simgesi solda olduğu için grup hafifçe sola kaydırılır.
     const counters = cx - 20;
     this.lives.setPosition(counters - HOME.counterGap, top);
     this.stars.setPosition(counters, top);
     this.coins.setPosition(counters + HOME.counterGap, top);
-    
-    // Başlığı saklayalım veya harita adını yazalım (örn: Saga Map)
     this.title.setPosition(cx, top + HOME.titleGap);
     this.progressText.setPosition(cx, top + HOME.titleGap + 62);
 
-    const below = height - 600;
+    const stageWidth = Math.min(HOME.stageMaxWidth, width - HOME.stageMargin * 2);
+    const stageTop = top + HOME.stageGap;
+    this.region.layout(cx - stageWidth / 2, stageTop, stageWidth);
+    this.map.layout(cx - stageWidth / 2, stageTop, stageWidth);
+    const stage = this.region.bounds;
+    this.mapButton.setPosition(stage.x + 150, stage.y + 66);
+
+    const below = stage.y + stage.height;
     const bottomSpace = height - below;
-    this.taskCard.setPosition(cx, below + bottomSpace * 0.16);
-    const tasksY = below + bottomSpace * 0.38;
-    this.tasksButton.setPosition(cx, tasksY);
-    this.tasksBadge.setPosition(cx + 190, tasksY - 48);
-    this.shopButton.setPosition(cx - 350, tasksY - 16);
-    this.settingsButton.setPosition(cx + 350, tasksY - 16);
-    this.spinButton.setPosition(cx - 350, tasksY - 180);
-    this.playButton.setPosition(cx, below + bottomSpace * 0.64);
+    this.taskCard.setPosition(cx, below + bottomSpace * 0.15);
+    const rowY = below + bottomSpace * 0.39;
+    this.shopButton.setPosition(cx - 400, rowY - 16);
+    this.marketButton.setPosition(cx - 240, rowY - 16);
+    this.tasksButton.setPosition(cx + 70, rowY);
+    this.tasksBadge.setPosition(cx + 70 + 165, rowY - 48);
+    this.settingsButton.setPosition(cx + 400, rowY - 16);
+    this.playButton.setPosition(cx, below + bottomSpace * 0.65);
     this.giftRow.setPosition(cx, this.playButton.y + 128);
-    this.devButtons.forEach((b, i) => b.setPosition(cx + (i - 0.5) * 340, height - 70));
   }
 
   private createBadge(): Phaser.GameObjects.Container {
@@ -189,10 +233,13 @@ export class HomeScene extends Phaser.Scene {
     return badge;
   }
 
+  // ───────────────────────── durum ─────────────────────────
+
   private get viewedRegion(): TownRegion {
     return townProgress.unlockedRegions[this.viewIndex];
   }
 
+  /** "Sıradaki hediye" çubuğu: sandık simgesi, 10 seviyelik ilerleme, hangi seviyede olduğu. */
   private createGiftRow(): void {
     const width = GIFT_BAR.width;
     const chest = this.add.image(-width / 2 - 50, 0, obstacleTexture('chest', 1)).setDisplaySize(84, 84);
@@ -222,6 +269,7 @@ export class HomeScene extends Phaser.Scene {
     this.giftRow.setVisible(level !== null);
     if (level === null) return;
     const target = nextChestLevel(level);
+    // Son sandıktan bu yana geçilen seviye (sandık seviyesini geçince dolar).
     const done = LEVEL_REWARDS.chestEvery - (target - level) - 1;
     const fraction = Math.max(0, done) / LEVEL_REWARDS.chestEvery;
     const width = GIFT_BAR.width;
@@ -241,53 +289,185 @@ export class HomeScene extends Phaser.Scene {
 
   private refreshCounters(animate: boolean): void {
     this.refreshLives();
-    this.stars.setValue(saveService.data.materials - this.starsInFlight, animate); // Using materials for stars logic
+    this.stars.setValue(saveService.data.stars - this.starsInFlight, animate);
     this.coins.setValue(this.coinDisplay ?? saveService.data.coins, animate);
-    this.tasksBadge.setVisible(townProgress.canBuildNext());
+    const done = townProgress.msLeft === 0;
+    this.tasksBadge.setVisible(townProgress.canBuildNext() || done);
     const level = levelProgress.currentLevel;
     this.playButton.setLabel(level ? `${t('home.play')} · ${t('home.level', { n: level })}` : t('home.allLevelsDone'));
     this.playButton.setEnabled(level !== null);
     this.refreshGiftRow();
-    this.sagaMap.refresh();
-  }
-
-  private async showRegion(): Promise<void> {
-    this.updateRegionLabels();
-  }
-
-  private updateRegionLabels(): void {
-    const region = this.viewedRegion;
-    const { built, total } = townProgress.regionProgress(region);
-    this.title.setText(t(`region.${region.id}` as I18nKey));
-    this.progressText.setText(
-      townProgress.townComplete ? t('home.townDone') : t('home.progress', { built, total }),
-    );
+    if (this.mode === 'map') void this.map.refresh(townProgress);
     void this.updateTaskCard();
   }
 
-  private async updateTaskCard(): Promise<void> {
-    this.taskCard.removeAll(true);
-    const region = this.viewedRegion;
-    const task = region === townProgress.currentRegion ? townProgress.nextTask() : null;
-    if (!task) return;
-    const icon = townPartTexture(task.id, 0);
-    await ensureTextures(this, [icon]);
-    if (!this.scene.isActive()) return;
-    const panel = this.add.nineslice(0, 0, TEXTURES.popupPanel, undefined, 720, 120, 44, 44, 44, 44);
-    const image = this.add.image(-290, 0, icon);
-    image.setScale(Math.min(84 / image.width, 84 / image.height));
-    const name = this.add
-      .text(-230, 0, t(`task.${task.id}` as I18nKey), { fontFamily: FONT_FAMILY, fontSize: '36px', fontStyle: '600', color: '#5a2d06' })
-      .setOrigin(0, 0.5);
-    const star = this.add.image(250, 0, TEXTURES.star).setDisplaySize(56, 56);
-    const cost = this.add
-      .text(296, 2, String(task.cost), { fontFamily: FONT_FAMILY, fontSize: '42px', fontStyle: '700', color: '#5a2d06' })
-      .setOrigin(0.5);
-    const hit = this.add.zone(0, 0, 720, 120).setInteractive({ useHandCursor: true });
-    hit.on('pointerup', () => void this.startBuild(task));
-    this.taskCard.add([panel, image, name, star, cost, hit]);
+  /** Saniyelik güncelleme: can sayacı, inşaat geri sayımı; süre dolunca inşaat biter. */
+  private tick(): void {
+    this.refreshLives();
+    this.refreshConstruction();
+    if (townProgress.msLeft === 0 && !this.busy) void this.completeBuild('finishBuild');
   }
 
+  /** Sahnedeki iskele/geri sayım ve görev kartındaki sayaç. */
+  private refreshConstruction(): void {
+    const c = townProgress.construction;
+    const ms = townProgress.msLeft;
+    if (this.mode === 'region' && c && ms !== null && c.task.startsWith(`${this.viewedRegion.id}.`)) {
+      void this.region.showConstruction(c.task, c.design);
+      this.region.updateConstruction(ms > 0 ? formatClock(ms) : t('construction.done'), townProgress.constructionProgress ?? 1);
+    } else {
+      this.region.clearConstruction();
+    }
+    if (this.cardTimer && ms !== null) {
+      const progress = townProgress.constructionProgress ?? 1;
+      this.cardTimer.text.setText(ms > 0 ? t('home.building', { time: formatClock(ms) }) : t('construction.done'));
+      this.cardTimer.bar.clear().fillStyle(0xffd23f, 1).fillRoundedRect(-200, 40, Math.max(24, 400 * progress), 24, 12);
+      const cost = townProgress.speedUpCost ?? 0;
+      this.cardTimer.cost.setLabel(cost === 0 ? t('construction.freeShort') : formatNumber(cost));
+    }
+  }
+
+  private async showRegion(): Promise<void> {
+    const region = this.viewedRegion;
+    await this.region.show(region, saveService.data.town.built);
+    this.updateRegionLabels();
+    this.refreshConstruction();
+  }
+
+  private updateRegionLabels(): void {
+    if (this.mode === 'map') {
+      const done = TOWN.filter((r) => townProgress.isRegionComplete(r)).length;
+      this.title.setText(t('map.title'));
+      this.progressText.setText(townProgress.townComplete ? t('home.townDone') : t('map.progress', { n: done, total: TOWN.length }));
+    } else {
+      const region = this.viewedRegion;
+      const { built, total } = townProgress.regionProgress(region);
+      this.title.setText(t(`region.${region.id}` as I18nKey));
+      this.progressText.setText(townProgress.isRegionComplete(region) ? t('map.regionDone') : t('home.progress', { built, total }));
+    }
+    this.mapButton.setVisible(this.mode === 'region');
+    void this.updateTaskCard();
+  }
+
+  /** Liman haritasını gösterir (bölge sahnesi gizlenir). */
+  private async showMap(): Promise<void> {
+    this.mode = 'map';
+    this.region.clearConstruction();
+    this.region.setVisible(false);
+    this.map.setVisible(true);
+    await this.map.refresh(townProgress);
+    this.updateRegionLabels();
+  }
+
+  /** Bir bölgenin sahnesini açar: bitmiş bölgede yapılanlar, şu anki bölgede süren inşaat da görünür. */
+  private async enterRegion(index: number): Promise<void> {
+    this.mode = 'region';
+    this.viewIndex = index;
+    this.map.setVisible(false);
+    this.region.setVisible(true);
+    await this.showRegion();
+  }
+
+  private async onMapTap(region: TownRegion, status: RegionStatus): Promise<void> {
+    if (this.busy) return;
+    if (status === 'locked') {
+      const previous = TOWN[TOWN.indexOf(region) - 1];
+      showToast(this, t('map.locked', { region: t(`region.${previous.id}` as I18nKey) }));
+      return;
+    }
+    this.busy = true;
+    await this.enterRegion(TOWN.indexOf(region));
+    this.busy = false;
+  }
+
+  private async backToMap(): Promise<void> {
+    if (this.busy) return;
+    this.busy = true;
+    await this.showMap();
+    this.busy = false;
+  }
+
+  /**
+   * Sıradaki görev kartı. İnşaat sürüyorsa: geri sayım, ilerleme ve hızlandırma bedeli (dokununca
+   * inşaat penceresi). Değilse: parça, ad, malzemeler (elde/gereken) ve süre (dokununca inşaat).
+   */
+  private async updateTaskCard(): Promise<void> {
+    // Kart haritada ve şu anki bölgenin sahnesinde görünür (eski bölgelerde görev yok).
+    const showCard = this.mode === 'map' || this.viewedRegion === townProgress.currentRegion;
+    const task = showCard ? townProgress.nextTask() : null;
+    const building = task !== null && townProgress.isUnderConstruction(task.id);
+    const m = townProgress.materials;
+    // Kart yalnızca içeriği değişince yeniden çizilir (sayaç her saniye ayrıca güncellenir).
+    const key = task ? `${task.id}|${building}|${recipeEntries(task.recipe).map(([id]) => m[id]).join(',')}` : '';
+    if (key === this.cardKey) return;
+    this.cardKey = key;
+    this.taskCard.removeAll(true);
+    this.cardTimer = null;
+    if (!task) return;
+    const design = building ? (townProgress.construction?.design ?? 0) : 0;
+    const icon = townPartTexture(task.id, design);
+    await ensureTextures(this, [icon]);
+    if (!this.scene.isActive() || this.cardKey !== key) return;
+
+    const panel = this.add.nineslice(0, 0, TEXTURES.popupPanel, undefined, CARD.width, CARD.height, 44, 44, 44, 44);
+    const image = this.add.image(-CARD.width / 2 + 80, 0, icon);
+    image.setScale(Math.min(100 / image.width, 100 / image.height));
+    const name = this.add
+      .text(-CARD.width / 2 + 150, -30, taskName(task), { fontFamily: FONT_FAMILY, fontSize: '34px', fontStyle: '700', color: '#5a2d06' })
+      .setOrigin(0, 0.5);
+    const hit = this.add.zone(0, 0, CARD.width, CARD.height).setInteractive({ useHandCursor: true });
+    this.taskCard.add([panel, image, name, hit]);
+
+    if (building) {
+      image.setAlpha(0.55);
+      hit.on('pointerup', () => void this.openConstruction());
+      const text = this.add
+        .text(-CARD.width / 2 + 150, 18, '', { fontFamily: FONT_FAMILY, fontSize: '30px', fontStyle: '700', color: '#b07800' })
+        .setOrigin(0, 0.5);
+      const track = this.add.graphics().fillStyle(0x06263d, 0.2).fillRoundedRect(-200, 40, 400, 24, 12);
+      const bar = this.add.graphics();
+      track.setX(-CARD.width / 2 + 350);
+      bar.setX(-CARD.width / 2 + 350);
+      const cost = new TextButton(this, CARD.width / 2 - 130, 0, '', () => void this.openConstruction(), {
+        width: 210,
+        height: 90,
+        fontSize: 34,
+        variant: 'green',
+        icon: TEXTURES.coin,
+      });
+      this.taskCard.add([text, track, bar, cost]);
+      this.cardTimer = { text, bar, cost };
+      this.refreshConstruction();
+      return;
+    }
+
+    hit.on('pointerup', () => void this.startBuild(task));
+    // Malzemeler: simge + elde/gereken (eksikse kırmızı).
+    recipeEntries(task.recipe).forEach(([id, need], i) => {
+      const x = -CARD.width / 2 + 170 + i * 150;
+      const enough = m[id] >= need;
+      this.taskCard.add(this.add.image(x, 30, materialTexture(id)).setDisplaySize(50, 50));
+      this.taskCard.add(
+        this.add
+          .text(x + 32, 30, `${Math.min(m[id], need)}/${need}`, {
+            fontFamily: FONT_FAMILY,
+            fontSize: '28px',
+            fontStyle: '700',
+            color: enough ? '#2e8b3d' : '#c0392b',
+          })
+          .setOrigin(0, 0.5),
+      );
+    });
+    const clock = this.add.image(CARD.width / 2 - 200, 0, TEXTURES.clock).setDisplaySize(52, 52);
+    const time = this.add
+      .text(CARD.width / 2 - 165, 0, formatDuration(task.minutes * 60_000), { fontFamily: FONT_FAMILY, fontSize: '32px', fontStyle: '700', color: '#5a2d06' })
+      .setOrigin(0, 0.5);
+    this.taskCard.add([clock, time]);
+  }
+
+  // ───────────────────────── eylemler ─────────────────────────
+
+  /** "Oyna": yeni eşya tanıtımı → (can yoksa can penceresi) → hedefler ve güçlendirici seçimi → bölüm. */
   private async play(): Promise<void> {
     const level = levelProgress.currentLevel;
     if (this.busy || level === null) return;
@@ -301,6 +481,7 @@ export class HomeScene extends Phaser.Scene {
     goToScene(this, SCENES.game, data);
   }
 
+  /** Bir pencereyi açar; açıkken ana ekranın diğer düğmeleri tepki vermez. */
   private async runPopup(open: () => Promise<unknown>): Promise<void> {
     if (this.busy) return;
     this.busy = true;
@@ -308,113 +489,176 @@ export class HomeScene extends Phaser.Scene {
     this.busy = false;
   }
 
+  /** Pazar; altın yetmezse oyuncu mağazaya yönlendirilir. */
+  private async openMarket(tab: MarketTab): Promise<void> {
+    await this.runPopup(async () => {
+      if ((await showMarket(this, tab)) === 'shop') await showShop(this);
+    });
+    this.cardKey = '';
+    void this.updateTaskCard();
+  }
+
   private async openSettings(): Promise<void> {
     if (this.busy) return;
     this.busy = true;
     const choice = await showSettings(this);
+    // Dil değişince tüm metinler yeni dille yeniden çizilsin.
     if (choice === 'language') {
       this.scene.restart();
       return;
     }
     if (choice === 'logout') {
+      // Kaydedilmemiş ilerleme varken internetsiz çıkış yapılmaz (ilerleme kaybolmasın).
       if ((await logout()) === 'ok') {
         goToScene(this, SCENES.auth);
         return;
       }
       showToast(this, t('account.logoutPending'));
     }
+    if (choice === 'reset') {
+      const confirmed = await showConfirm(this, { title: t('reset.title'), message: t('reset.warning'), confirm: t('reset.confirm') });
+      if (confirmed && dispatch({ type: 'resetProgress' }).ok) {
+        showToast(this, t('reset.done'));
+        this.scene.restart();
+        return;
+      }
+    }
     this.busy = false;
   }
-  
-  private async openTasksForRegion(region: TownRegion): Promise<void> {
-    if (this.busy) return;
-    this.busy = true;
-    const choice = await showTaskList(this, region, townProgress);
-    this.busy = false;
-    if (!choice) return;
-    if (choice.action === 'build') await this.startBuild(choice.task);
-    else await this.changeDesign(choice.task);
+
+  /** Görevler her zaman inşa edilen bölgeye aittir; eski bir bölgeye bakılıyorsa oraya dönülür. */
+  private async viewCurrentRegion(): Promise<void> {
+    const current = townProgress.unlockedRegions.length - 1;
+    if (this.mode === 'region' && this.viewIndex === current) return;
+    await this.enterRegion(current);
   }
 
   private async openTasks(): Promise<void> {
-    this.openTasksForRegion(townProgress.currentRegion);
+    if (this.busy) return;
+    this.busy = true;
+    await this.viewCurrentRegion();
+    const choice = await showTaskList(this, this.viewedRegion, townProgress);
+    this.busy = false;
+    if (!choice) return;
+    if (choice.action === 'build') await this.startBuild(choice.task);
+    else if (choice.action === 'construction') await this.openConstruction();
+    else await this.changeDesign(choice.task);
   }
 
+  /** İnşaat penceresi (tasarım + malzeme) → malzemeler harcanır, süre başlar. */
   private async startBuild(task: TownTask): Promise<void> {
     if (this.busy) return;
-    if (townProgress.materials < task.cost) {
-      const missing = task.cost - townProgress.materials;
-      const costGold = missing * ECONOMY.missingMaterialGoldCost;
-      this.busy = true;
-      const bought = await showMissingMaterialBuy(this, missing, costGold, saveService.data.coins);
-      this.busy = false;
-      if (!bought) return;
-      
-      const cmd = dispatch({ type: 'buyMissingMaterial', missingAmount: missing });
-      if (!cmd.ok) return;
-      this.refreshCounters(true);
+    if (townProgress.construction) {
+      await this.openConstruction();
+      return;
     }
     this.busy = true;
-    const design = await showDesignPicker(this, task, 'build');
-    if (design === null) {
-      this.busy = false;
+    await this.viewCurrentRegion();
+    const choice = await showBuildPopup(this, task, townProgress);
+    this.busy = false;
+    if (choice === 'market') {
+      await this.openMarket('materials');
       return;
     }
-    const coinsBefore = saveService.data.coins;
-    this.coinDisplay = coinsBefore;
-    const command = dispatch({ type: 'build', task: task.id, design });
-    const result = command.ok ? (command.value as BuildResult) : ({ ok: false, reason: 'unknown' } as const);
-    if (!result.ok) {
-      this.coinDisplay = null;
-      this.busy = false;
+    if (choice === null) {
+      this.cardKey = '';
+      void this.updateTaskCard();
       return;
     }
-    if (!result.regionCompleted) this.coinDisplay = null;
-    
-    // Removed specific region coordinate flight animation since we don't have region view anymore
+    const command = dispatch({ type: 'build', task: task.id, design: choice });
+    if (!command.ok) return;
+    this.busy = true;
     audio.play('build');
-    this.sagaMap.refresh();
+    this.cameras.main.shake(140, 0.003);
+    this.refreshConstruction();
+    await this.say(t('build.started', { time: formatDuration(task.minutes * 60_000) }));
+    this.busy = false;
+    this.tick();
+  }
+
+  /** Süren inşaat penceresi: geri sayım, altınla hemen bitirme. */
+  private async openConstruction(): Promise<void> {
+    if (this.busy || !townProgress.construction) return;
+    this.busy = true;
+    await this.viewCurrentRegion();
+    const choice = await showConstruction(this, townProgress);
+    this.busy = false;
+    if (choice === 'speedUp') await this.completeBuild('speedUpBuild');
+    else if (choice === 'ready') await this.completeBuild('finishBuild');
+    else if (choice === 'shop') await this.runPopup(() => showShop(this));
+  }
+
+  /**
+   * İnşaatı bitirir (süre dolduysa ücretsiz, değilse altınla): parça tozun içinden belirir, Kaptan
+   * konuşur; bölge bittiyse sandık açılır ve sıradaki bölge gösterilir.
+   */
+  private async completeBuild(type: 'finishBuild' | 'speedUpBuild'): Promise<void> {
+    if (this.busy) return;
+    this.busy = true;
+    const command = dispatch({ type });
+    if (!command.ok) {
+      if (command.reason === 'coins') showToast(this, t('error.coins'));
+      this.busy = false;
+      return;
+    }
+    const result = command.value as Extract<FinishResult, { ok: true }>;
+    const chestCoins = result.regionCompleted?.chestCoins ?? 0;
+    // Bölge sandığının altını sayaca, sandık açıldıktan sonra uçarak gelsin.
+    const coinsBefore = saveService.data.coins - chestCoins;
+    if (chestCoins > 0) this.coinDisplay = coinsBefore;
+    this.cardKey = '';
+    // Biten parça kendi bölgesinin sahnesinde belirir (harita açıksa o bölgeye geçilir).
+    const regionIndex = TOWN.findIndex((r) => r.id === result.task.region);
+    if (this.mode !== 'region' || this.viewIndex !== regionIndex) await this.enterRegion(regionIndex);
+    else this.region.clearConstruction();
+    audio.play('build');
+    await this.region.build(result.task.id, result.design);
     this.updateRegionLabels();
-    await this.say(t(`quip.task.${task.id}` as I18nKey));
+    this.refreshCounters(false);
+    await this.say(t(`quip.task.${result.task.id}` as I18nKey));
 
     if (result.regionCompleted) {
-      const { region, chestCoins, next } = result.regionCompleted;
+      const { region, next } = result.regionCompleted;
       await showRegionChest(this, region, chestCoins, next);
       await this.collectCoins(coinsBefore);
       if (next) {
+        // Haritada yeni bölgeye giden rota açılır.
         this.viewIndex = townProgress.unlockedRegions.length - 1;
-        await this.showRegion();
+        await this.showMap();
+        this.map.celebrate(next);
       }
     }
     this.busy = false;
   }
 
   private async changeDesign(task: TownTask): Promise<void> {
+    if (this.busy) return;
     this.busy = true;
-    const design = await showDesignPicker(this, task, 'change', townProgress.designOf(task.id) ?? 0);
-    if (design !== null && dispatch({ type: 'changeDesign', task: task.id, design }).ok) {
-       this.sagaMap.refresh();
-    }
+    const design = await showDesignPicker(this, task, townProgress.designOf(task.id) ?? 0);
+    if (design !== null && dispatch({ type: 'changeDesign', task: task.id, design }).ok) await this.region.changeDesign(task.id, design);
     this.busy = false;
   }
 
+  /** Kaptan Pati'nin balonu (sahnenin altında, yeni parçayı örtmez): dokununca ya da birkaç saniye sonra kapanır. */
   private async say(text: string): Promise<void> {
-    const y = this.scale.height / 2;
+    const stage = this.region.bounds;
+    const y = stage.y + stage.height + 30 + CAPTAIN_BUBBLE_HEIGHT / 2;
     const bubble = createCaptainBubble(this, this.scale.width / 2, y, text, {
       depth: DEPTH.bubble,
       tapHint: true,
     });
     const catcher = this.add.zone(0, 0, this.scale.width, this.scale.height).setOrigin(0).setDepth(DEPTH.bubble + 1);
     catcher.setInteractive();
-    await Promise.race([
-      new Promise<void>((resolve) => catcher.once('pointerup', () => resolve())),
-      waitMs(this, 4500),
-    ]);
+    await Promise.race([new Promise<void>((resolve) => catcher.once('pointerup', () => resolve())), waitMs(this, 4500)]);
     catcher.destroy();
     this.tweens.killTweensOf(bubble);
     bubble.destroy();
   }
 
+  /**
+   * Ana ekrana gelince: bölümde kazanılan yıldız sayaca uçar, seviye sandığı ve günün ilk girişinde
+   * günlük ödül açılır (altınlar sayaca akar), görev yapılabiliyorsa görev kartı dikkat çeker.
+   */
   private async welcome(): Promise<void> {
     if (this.busy) return;
     this.busy = true;
@@ -445,11 +689,13 @@ export class HomeScene extends Phaser.Scene {
       await this.collectCoins(coinsBefore);
     }
     this.busy = false;
-    if (this.starsEarned > 0 && townProgress.canBuildNext()) {
-      this.tweens.add({ targets: this.taskCard, scale: 1.06, duration: 300, yoyo: true, repeat: 3 });
+    if (townProgress.canBuildNext()) {
+      this.tweens.add({ targets: this.taskCard, scale: 1.05, duration: 300, yoyo: true, repeat: 3 });
     }
+    this.tick();
   }
 
+  /** Kazanılan altınlar ekranın ortasından sayaca uçar; sayaç her varışta biraz artar. */
   private async collectCoins(coinsBefore: number): Promise<void> {
     const gained = saveService.data.coins - coinsBefore;
     if (gained <= 0) {
@@ -471,20 +717,5 @@ export class HomeScene extends Phaser.Scene {
     });
     this.coinDisplay = null;
     this.refreshCounters(false);
-  }
-
-  private createDevPanel(): void {
-    const options = { width: 300, height: 80, fontSize: 32 };
-    this.devButtons = [
-      new TextButton(this, 0, 0, t('dev.addStars'), () => {
-        dispatch({ type: 'devAddStars', amount: 5 });
-        void this.updateTaskCard();
-      }, options),
-      new TextButton(this, 0, 0, t('dev.reset'), () => {
-        dispatch({ type: 'devReset' });
-        this.scene.restart();
-      }, options),
-    ];
-    for (const b of this.devButtons) b.setDepth(DEPTH.ui);
   }
 }

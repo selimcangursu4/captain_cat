@@ -11,6 +11,11 @@ export function currentUser(): SessionUser | null {
   return current?.user ?? null;
 }
 
+/** Oturumun belirteci (sunucu istekleri için; yoksa null). */
+export function currentToken(): string | null {
+  return current?.token ?? null;
+}
+
 /** Hesabın telefondaki kaydına ve komut günlüğüne geçer. */
 function activate(session: Session): void {
   current = session;

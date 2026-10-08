@@ -4,7 +4,7 @@
 export interface ServerConfig {
   readonly port: number;
   readonly databaseUrl: string;
-  /** Geliştirici komutlarına (+yıldız, sıfırla, seviye atla) izin ver. Yayında kapalı olmalı. */
+  /** Geliştirici komutlarına (+yıldız, seviye atla) ve deneme alımlarına izin ver. Yayında kapalı olmalı. */
   readonly devCommands: boolean;
   /** CORS: izin verilen kaynaklar; true = hepsi. */
   readonly corsOrigins: string[] | true;
@@ -13,6 +13,8 @@ export interface ServerConfig {
   /** Kaba kuvvete karşı: IP başına saatte kayıt, IP+e-posta başına 10 dakikada giriş denemesi. */
   readonly registerPerHour: number;
   readonly loginPer10Min: number;
+  /** RevenueCat gizli anahtarı (sk_…): gerçek ödemeleri doğrulamak için. Yoksa gerçek alım kabul edilmez. */
+  readonly revenueCatSecretKey: string | null;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -32,5 +34,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     sessionDays: Number(env.SESSION_DAYS ?? 90),
     registerPerHour: Number(env.RATE_LIMIT_REGISTER_PER_HOUR ?? 5),
     loginPer10Min: Number(env.RATE_LIMIT_LOGIN_PER_10MIN ?? 10),
+    revenueCatSecretKey: env.REVENUECAT_SECRET_KEY?.trim() || null,
   };
 }

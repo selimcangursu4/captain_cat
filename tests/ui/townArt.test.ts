@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ASSET_MANIFEST, TOWN_STAGE, townBackgroundTexture, townPartBox, townPartTexture } from '../../src/assets/AssetManifest';
+import { ASSET_MANIFEST, TEXTURES, TOWN_STAGE, regionIconTexture, townBackgroundTexture, townPartBox, townPartTexture } from '../../src/assets/AssetManifest';
+import { MAP_NODES } from '../../src/assets/svg/town/map';
 import { TOWN } from '../../src/meta/town';
 
 describe('kasaba görselleri', () => {
@@ -35,5 +36,20 @@ describe('kasaba görselleri', () => {
       return entry.kind === 'svg' ? entry.render() : '';
     });
     expect(new Set(svgs).size).toBe(3);
+  });
+
+  it('liman haritası: her bölgenin düğümü sahnenin içinde, simgesi tanımlı; harita zemini tembel yüklenir', () => {
+    expect(ASSET_MANIFEST[TEXTURES.townMap]?.lazy).toBe(true);
+    for (const region of TOWN) {
+      const { x, y } = MAP_NODES[region.id];
+      // Düğüm (yarıçap 80) ve altındaki ad sahneden taşmasın.
+      expect(x - 120).toBeGreaterThanOrEqual(0);
+      expect(x + 120).toBeLessThanOrEqual(TOWN_STAGE.width);
+      expect(y - 90).toBeGreaterThanOrEqual(0);
+      expect(y + 140).toBeLessThanOrEqual(TOWN_STAGE.height);
+      const icon = ASSET_MANIFEST[regionIconTexture(region.id)];
+      expect(icon).toBeDefined();
+      if (icon.kind === 'svg') expect(icon.render()).toMatch(/^<svg[\s\S]*<\/svg>$/);
+    }
   });
 });

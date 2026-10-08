@@ -103,6 +103,15 @@ export class SyncService {
     return this.inFlight;
   }
 
+  /**
+   * Sürmekte olan eşitlemeyi bekler ve yeni bir eşitleme yapar: sunucunun kaydı komut dışında
+   * değiştiğinde (ör. doğrulanan satın alma) istemci en güncel kaydı alsın.
+   */
+  async refresh(): Promise<void> {
+    if (this.inFlight) await this.inFlight;
+    await this.syncNow();
+  }
+
   onStatus(listener: (status: SyncStatus) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);

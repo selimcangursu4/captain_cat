@@ -1,4 +1,4 @@
-import { ECONOMY, ITEM_IDS, type ItemId } from '../config/economy';
+import { ECONOMY, ITEM_IDS, MATERIAL_IDS, SHIP_UPGRADE_IDS, type ItemId, type MaterialId, type ShipUpgradeId } from '../config/economy';
 
 /**
  * Kayıt sistemi. Oyuncunun ilerlemesi tek bir sürümlü JSON belgesindedir; aynı belge sunucuda
@@ -7,14 +7,25 @@ import { ECONOMY, ITEM_IDS, type ItemId } from '../config/economy';
  * sunucuda ve testlerde bellek.
  *
  * Sürümler: 1 — bölüm, yıldız, altın, kasaba; 2 — can, envanter, günlük ödül, ayarlar;
- * 3 — açık seviye denemesi; ayarlar cihaza özgü olduğu için kayıttan çıktı (src/services/Settings.ts).
+ * 3 — açık seviye denemesi; ayarlar cihaza özgü olduğu için kayıttan çıktı (src/services/Settings.ts);
+ * 4-5 — tek tür malzeme, gemi, kumbara; 6 — malzeme türleri, inşaat süresi, sandık tohumu, komut saati.
  */
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
+
+/** Süren inşaat (aynı anda bir tane). */
+export interface ConstructionSave {
+  task: string;
+  design: number;
+  startedAt: number;
+  endsAt: number;
+}
 
 export interface TownSave {
   region: number;
+  /** Bitmiş görevler → seçilen tasarım. */
   built: Record<string, number>;
   chests: string[];
+  construction: ConstructionSave | null;
 }
 
 export interface AttemptSave {
@@ -28,40 +39,53 @@ export interface SaveData {
   level: number;
   stars: number;
   coins: number;
-  materials: number;
+  materials: Record<MaterialId, number>;
   town: TownSave;
-  ship: Record<string, number>; // upgradeId -> level
+  ship: Record<ShipUpgradeId, number>;
   stats: { levelsWon: number; levelsLost: number };
   lives: { count: number; nextAt: number | null };
   inventory: Record<ItemId, number>;
   unlocked: ItemId[];
-  cosmetics: string[];
   daily: { lastClaim: string | null; streak: number };
   attempt: AttemptSave | null;
   piggyBank: { coins: number };
+  /** Sandık çekilişlerinin tohumu: istemci ve sunucu aynı sonucu bulsun diye kayıtta. */
+  rng: number;
+  /** Kayda işlenen en geç komut anı (ms). İnşaat bu andan geriye başlatılamaz (saat geri alma hilesi). */
+  clock: number;
 }
 
 export function emptyInventory(): Record<ItemId, number> {
   return Object.fromEntries(ITEM_IDS.map((id) => [id, 0])) as Record<ItemId, number>;
 }
 
-export function defaultSave(): SaveData {
+export function emptyMaterials(): Record<MaterialId, number> {
+  return Object.fromEntries(MATERIAL_IDS.map((id) => [id, 0])) as Record<MaterialId, number>;
+}
+
+function emptyShip(): Record<ShipUpgradeId, number> {
+  return Object.fromEntries(SHIP_UPGRADE_IDS.map((id) => [id, 0])) as Record<ShipUpgradeId, number>;
+}
+
+/** Yeni hesabın kaydı. Sunucu, kayıt olurken `rng`'ye rastgele bir tohum verir. */
+export function defaultSave(rng = 0x2f6b1a3d): SaveData {
   return {
     version: SAVE_VERSION,
     level: 1,
-    stars: 0,
+    stars: ECONOMY.startingStars,
     coins: ECONOMY.startingCoins,
-    materials: ECONOMY.startingMaterial,
-    town: { region: 0, built: {}, chests: [] },
-    ship: {},
+    materials: { ...emptyMaterials(), ...ECONOMY.startingMaterials },
+    town: { region: 0, built: {}, chests: [], construction: null },
+    ship: emptyShip(),
     stats: { levelsWon: 0, levelsLost: 0 },
     lives: { count: ECONOMY.lives.max, nextAt: null },
     inventory: emptyInventory(),
     unlocked: [],
-    cosmetics: [],
     daily: { lastClaim: null, streak: 0 },
     attempt: null,
     piggyBank: { coins: 0 },
+    rng: rng >>> 0,
+    clock: 0,
   };
 }
 
@@ -85,6 +109,7 @@ export class LocalStorageSaveStorage implements SaveStorage {
     try {
       globalThis.localStorage?.setItem(this.key, value);
     } catch {
+      // Depolama dolu ya da kapalı: kayıt bellekte sürer, sunucu eşitlemesi esastır.
     }
   }
 }
@@ -100,25 +125,36 @@ export class MemorySaveStorage implements SaveStorage {
 }
 
 const isInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v);
+const isNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
 
+function migrateConstruction(raw: unknown): ConstructionSave | null {
+  if (!isObject(raw)) return null;
+  const { task, design, startedAt, endsAt } = raw;
+  if (typeof task !== 'string' || !isInt(design) || design < 0 || design > 2) return null;
+  if (!isNumber(startedAt) || !isNumber(endsAt) || endsAt < startedAt) return null;
+  return { task, design, startedAt, endsAt };
+}
+
+/** Eski ya da bozuk kaydı geçerli bir kayda çevirir (geçersiz alanlar varsayılana döner). */
 export function migrate(raw: unknown): SaveData {
   const base = defaultSave();
-  if (typeof raw !== 'object' || raw === null) return base;
-  const d = raw as Record<string, unknown>;
-  const town = (typeof d.town === 'object' && d.town !== null ? d.town : {}) as Record<string, unknown>;
+  if (!isObject(raw)) return base;
+  const d = raw;
+  const version = isInt(d.version) ? d.version : 0;
+  const town = isObject(d.town) ? d.town : {};
   const built: Record<string, number> = {};
-  if (typeof town.built === 'object' && town.built !== null) {
-    for (const [key, value] of Object.entries(town.built as Record<string, unknown>)) {
+  if (isObject(town.built)) {
+    for (const [key, value] of Object.entries(town.built)) {
       if (isInt(value) && value >= 0 && value <= 2) built[key] = value;
     }
   }
-  const stats = (typeof d.stats === 'object' && d.stats !== null ? d.stats : {}) as Record<string, unknown>;
+  const stats = isObject(d.stats) ? d.stats : {};
 
   const lives = isObject(d.lives) ? d.lives : {};
   const livesCount = isInt(lives.count) ? Math.min(ECONOMY.lives.maxStored, Math.max(0, lives.count)) : base.lives.count;
-  const nextAt = typeof lives.nextAt === 'number' && Number.isFinite(lives.nextAt) ? lives.nextAt : null;
+  const nextAt = isNumber(lives.nextAt) ? lives.nextAt : null;
 
   const inventory = emptyInventory();
   const rawInventory = isObject(d.inventory) ? d.inventory : {};
@@ -128,10 +164,25 @@ export function migrate(raw: unknown): SaveData {
   }
   const knownItem = (v: unknown): v is ItemId => (ITEM_IDS as readonly unknown[]).includes(v);
 
-  const ship: Record<string, number> = {};
+  // Sürüm 4-5: tek tür "malzeme" sayısı vardı (her seviye 25); türlü malzemeye geçerken yıldıza çevrilir.
+  let stars = isInt(d.stars) && d.stars >= 0 ? d.stars : base.stars;
+  let materials = base.materials;
+  if (isObject(d.materials)) {
+    materials = emptyMaterials();
+    for (const id of MATERIAL_IDS) {
+      const n = d.materials[id];
+      if (isInt(n) && n >= 0) materials[id] = n;
+    }
+  } else if (version >= 4 && version < 6 && isInt(d.materials) && d.materials > 0) {
+    stars += Math.floor(d.materials / ECONOMY.legacyMaterialsPerStar);
+  }
+
+  const ship = emptyShip();
   if (isObject(d.ship)) {
-    for (const [key, value] of Object.entries(d.ship)) {
-      if (isInt(value)) ship[key] = value;
+    for (const id of SHIP_UPGRADE_IDS) {
+      const value = d.ship[id];
+      const max = ECONOMY.ship[id].levels.length;
+      if (isInt(value) && value >= 0) ship[id] = Math.min(max, value);
     }
   }
 
@@ -142,13 +193,14 @@ export function migrate(raw: unknown): SaveData {
   return {
     version: SAVE_VERSION,
     level: isInt(d.level) && d.level >= 1 ? d.level : base.level,
-    stars: isInt(d.stars) && d.stars >= 0 ? d.stars : base.stars,
+    stars,
     coins: isInt(d.coins) && d.coins >= 0 ? d.coins : base.coins,
-    materials: isInt(d.materials) && d.materials >= 0 ? d.materials : (d.version as number < 4 ? base.materials : 0),
+    materials,
     town: {
       region: isInt(town.region) && town.region >= 0 ? town.region : 0,
       built,
       chests: Array.isArray(town.chests) ? town.chests.filter((c): c is string => typeof c === 'string') : [],
+      construction: migrateConstruction(town.construction),
     },
     ship,
     stats: {
@@ -158,18 +210,19 @@ export function migrate(raw: unknown): SaveData {
     lives: { count: livesCount, nextAt: livesCount >= ECONOMY.lives.max ? null : nextAt },
     inventory,
     unlocked: Array.isArray(d.unlocked) ? [...new Set(d.unlocked.filter(knownItem))] : [],
-    cosmetics: Array.isArray(d.cosmetics) ? [...new Set(d.cosmetics.filter((c) => typeof c === 'string'))] as string[] : [],
     daily: {
       lastClaim: typeof daily.lastClaim === 'string' && DATE_KEY.test(daily.lastClaim) ? daily.lastClaim : null,
       streak: isInt(daily.streak) && daily.streak >= 0 ? daily.streak : 0,
     },
     attempt:
-      attempt && isInt(attempt.level) && attempt.level >= 1 && typeof attempt.startedAt === 'number'
-        ? { level: attempt.level, startedAt: attempt.startedAt, extraMoves: isInt(attempt.extraMoves) ? attempt.extraMoves : 0 }
+      attempt && isInt(attempt.level) && attempt.level >= 1 && isNumber(attempt.startedAt)
+        ? { level: attempt.level, startedAt: attempt.startedAt, extraMoves: isInt(attempt.extraMoves) && attempt.extraMoves >= 0 ? attempt.extraMoves : 0 }
         : null,
     piggyBank: {
-      coins: isInt(piggyBank.coins) && piggyBank.coins >= 0 ? piggyBank.coins : 0,
+      coins: isInt(piggyBank.coins) && piggyBank.coins >= 0 ? Math.min(ECONOMY.piggyBank.maxCoins, piggyBank.coins) : 0,
     },
+    rng: isInt(d.rng) ? d.rng >>> 0 : base.rng,
+    clock: isNumber(d.clock) && d.clock >= 0 ? d.clock : 0,
   };
 }
 
@@ -222,9 +275,12 @@ export class SaveService {
     return () => this.listeners.delete(listener);
   }
 
-  /** İlerlemeyi sıfırlar (geliştirici paneli). */
+  /** İlerlemeyi sıfırlar. Sandık tohumu ve komut saati korunur (sıfırlama çekilişi baştan almaya yaramasın). */
   reset(): void {
-    this.update((draft) => Object.assign(draft, defaultSave()));
+    this.update((draft) => {
+      const { rng, clock } = draft;
+      Object.assign(draft, defaultSave(rng), { clock });
+    });
   }
 
   private notify(): void {

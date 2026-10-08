@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { itemTexture } from '../assets/AssetManifest';
+import { itemTexture, shipUpgradeTexture } from '../assets/AssetManifest';
 import { ANIM } from '../config/animation';
 import { ECONOMY, type BoosterId, type HelperId } from '../config/economy';
 import { INPUT } from '../config/input';
@@ -21,6 +21,7 @@ import {
 } from '../core';
 import { getLevel, levelCount } from '../data/levels';
 import type { LevelRewardResult } from '../meta/LevelProgress';
+import { extraMovesBought, extraMovesCost, shipBonus } from '../meta/pricing';
 import { inventory, levelProgress } from '../meta/progress';
 import { dispatch } from '../net/sync';
 import { t } from '../i18n';
@@ -59,6 +60,9 @@ const BOOSTER_SPECIALS: Record<BoosterId, readonly SpecialKind[]> = {
   cannon: ['cannon'],
   whirlpool: ['whirlpool'],
 };
+
+/** Gemi motoru yükseltmesinin bölüm başında koyduğu güçlendiriciler (tahtanın tohumuyla seçilir). */
+const ENGINE_SPECIALS: readonly SpecialKind[] = ['harpoon-h', 'harpoon-v', 'cannon'];
 
 /**
  * Oyun ekranı: bir bölümün oynanışı.
@@ -183,53 +187,36 @@ export class GameScene extends Phaser.Scene {
     this.scheduleHint();
   }
 
-  /** Seçilen güçlendiriciler ekranın ortasından tahtadaki rastgele bir taşa uçar ve onu dönüştürür. */
+  /**
+   * Seçilen güçlendiriciler ekranın ortasından tahtadaki rastgele bir taşa uçar ve onu dönüştürür.
+   * Gemi motoru yükseltilmişse bunlara ek olarak motor seviyesi kadar hazır güçlendirici gelir.
+   * Öğretici bölümlerde motor devreye girmez (öğretici tahtası sabit kalmalı).
+   */
   private async applyBoosters(boosters: readonly BoosterId[]): Promise<void> {
-    const itemsToPlace: Array<{ special: SpecialKind | readonly SpecialKind[], texture: string | null }> = boosters.map(id => ({
-      special: BOOSTER_SPECIALS[id],
-      texture: itemTexture(id)
-    }));
-
-    const engineLvl = saveService.data.ship.engine || 0;
-    if (engineLvl > 0) {
-       const engineConfig = (ECONOMY.shipUpgrades as any).engine.levels.find((l: any) => l.level === engineLvl);
-       if (engineConfig && engineConfig.bonusValue > 0) {
-         const randomSpecials: SpecialKind[] = ['cannon', 'harpoon-v', 'harpoon-h', 'whirlpool'];
-         for (let i = 0; i < engineConfig.bonusValue; i++) {
-           itemsToPlace.push({
-             special: randomSpecials[Math.floor(Math.random() * randomSpecials.length)],
-             texture: null // No flight animation for engine specials
-           });
-         }
-       }
-    }
-
-    for (const item of itemsToPlace) {
-      const specialArr = Array.isArray(item.special) ? item.special : [item.special];
-      const placed = this.session.placeBooster(specialArr);
+    const engine = this.session.level.tutorial.length > 0 ? 0 : shipBonus('engine', saveService.data.ship.engine);
+    const placements: { kinds: readonly SpecialKind[]; texture: string }[] = [
+      ...boosters.map((id) => ({ kinds: BOOSTER_SPECIALS[id], texture: itemTexture(id) })),
+      ...Array.from({ length: engine }, () => ({ kinds: ENGINE_SPECIALS, texture: shipUpgradeTexture('engine') })),
+    ];
+    for (const { kinds, texture } of placements) {
+      const placed = this.session.placeBooster(kinds);
       if (!placed) continue;
-      
-      if (item.texture) {
-        const target = this.view.toWorld(this.view.cellCenter(placed.pos));
-        const icon = this.add
-          .image(this.scale.width / 2, this.scale.height / 2, item.texture)
-          .setDepth(45)
-          .setDisplaySize(240, 240);
-        await tweenAsync(this, { targets: icon, scale: icon.scale * 1.15, duration: 200, ease: 'Back.easeOut' });
-        await tweenAsync(this, {
-          targets: icon,
-          x: target.x,
-          y: target.y,
-          scale: (this.view.cellSize / 128) * 0.9,
-          duration: ANIM.boosterFlightMs,
-          ease: 'Cubic.easeInOut',
-        });
-        icon.destroy();
-        audio.play('booster');
-      } else {
-        // Engine perk: subtle sound or just silent placement
-        audio.play('booster');
-      }
+      const target = this.view.toWorld(this.view.cellCenter(placed.pos));
+      const icon = this.add
+        .image(this.scale.width / 2, this.scale.height / 2, texture)
+        .setDepth(45)
+        .setDisplaySize(240, 240);
+      await tweenAsync(this, { targets: icon, scale: icon.scale * 1.15, duration: 200, ease: 'Back.easeOut' });
+      await tweenAsync(this, {
+        targets: icon,
+        x: target.x,
+        y: target.y,
+        scale: (this.view.cellSize / 128) * 0.9,
+        duration: ANIM.boosterFlightMs,
+        ease: 'Cubic.easeInOut',
+      });
+      icon.destroy();
+      audio.play('booster');
       await this.view.convertTile(placed.tileId, placed.special);
     }
     this.checkSync();
@@ -359,26 +346,17 @@ export class GameScene extends Phaser.Scene {
     const bonusMoves = await this.playCelebration();
     this.checkSync();
     
-    const baseCoins = ECONOMY.levelWinCoins + bonusMoves * ECONOMY.coinsPerBonusMove + this.session.coinsCollected;
-    
-    let hullBonusPercent = 0;
-    const hullLvl = saveService.data.ship.hull || 0;
-    if (hullLvl > 0) {
-      const hullConfig = (ECONOMY.shipUpgrades as any).hull.levels.find((l: any) => l.level === hullLvl);
-      if (hullConfig) {
-        hullBonusPercent = hullConfig.bonusValue;
-      }
-    }
-    
-    const coins = Math.floor(baseCoins * (1 + hullBonusPercent / 100));
-
+    // Bölüm altını; gemi gövdesi bonusunu kural ekler (sunucu da aynı hesabı yapar).
+    const coins = ECONOMY.levelWinCoins + bonusMoves * ECONOMY.coinsPerBonusMove + this.session.coinsCollected;
     // Kazanç komutla kaydedilir: harcanan can geri gelir, seviye ödülü verilir (sunucu da doğrular).
     const win = dispatch({ type: 'winLevel', level: this.levelId, coins });
-    const result: LevelRewardResult = win.ok ? (win.value as LevelRewardResult) : { materials: 0, coins, nextLevel: this.levelId, reward: null };
-    await showWin(this, coins, result.materials, result.reward?.lives ?? 0);
+    const result: LevelRewardResult = win.ok
+      ? (win.value as LevelRewardResult)
+      : { stars: 0, material: null, coins, nextLevel: this.levelId, reward: null };
+    await showWin(this, result.coins, result.stars, result.reward?.lives ?? 0, result.material);
     // Seviye sandığı (her 10 seviyede) kasabada açılır.
     const chestLevel = result.reward && result.reward.chest !== 'none' ? this.levelId : undefined;
-    this.goHome(result.materials, chestLevel);
+    this.goHome(result.stars, chestLevel);
   }
 
   /** Bölüm sonu kutlaması; kaç hamlenin bonusa dönüştüğünü döndürür. */
@@ -443,7 +421,9 @@ export class GameScene extends Phaser.Scene {
   /** Hamleler bitti: "+5 hamle" teklifi; vazgeçilirse can gider, başarısız penceresi ve tekrar. */
   private async handleOutOfMoves(): Promise<void> {
     this.setActiveHelper(null);
-    const { count, cost } = ECONOMY.extraMoves;
+    const { count } = ECONOMY.extraMoves;
+    // Aynı denemede her alımda fiyat artar.
+    const cost = extraMovesCost(extraMovesBought(saveService.data.attempt?.extraMoves ?? 0));
     const choice = await showOutOfMoves(this, {
       goals: this.session.goals.states,
       count,

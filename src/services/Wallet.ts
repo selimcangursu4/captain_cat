@@ -1,23 +1,24 @@
 import { saveService, type SaveService } from './SaveService';
 
 /**
- * Altın cüzdanı. Oyun kodu yalnızca bu arayüzü kullanır; altın kayıt sisteminde tutulur.
+ * Cüzdan: altın ve yıldız. Oyun kodu yalnızca bu arayüzü kullanır; değerler kayıt sisteminde tutulur.
+ * Altın: gerçek parayla da alınan para birimi (can, güçlendirici, hızlandırma, sandık…).
+ * Yıldız: seviyelerden gelir (altınla da takas edilir); Pazar'da malzemeye harcanır.
  */
 export interface Wallet {
   readonly coins: number;
-  readonly materials: number;
-  
+  readonly stars: number;
+
   addCoins(amount: number): void;
-  addMaterials(amount: number): void;
-  
+  addStars(amount: number): void;
+
   /** Yeterli altın varsa düşer ve true döner. */
   trySpendCoins(amount: number): boolean;
-  /** Yeterli material varsa düşer ve true döner. */
-  trySpendMaterials(amount: number): boolean;
-  
+  /** Yeterli yıldız varsa düşer ve true döner. */
+  trySpendStars(amount: number): boolean;
+
   /** Değişiklikleri dinler; dinlemeyi bırakmak için dönen fonksiyonu çağırın. */
   onCoinsChange(listener: (coins: number) => void): () => void;
-  onMaterialsChange(listener: (materials: number) => void): () => void;
 }
 
 /** Kayıt dosyasında tutulan cüzdan. */
@@ -27,9 +28,9 @@ export class SavedWallet implements Wallet {
   get coins(): number {
     return this.save.data.coins;
   }
-  
-  get materials(): number {
-    return this.save.data.materials;
+
+  get stars(): number {
+    return this.save.data.stars;
   }
 
   addCoins(amount: number): void {
@@ -38,26 +39,28 @@ export class SavedWallet implements Wallet {
       d.coins += amount;
     });
   }
-  
-  addMaterials(amount: number): void {
+
+  addStars(amount: number): void {
     if (amount <= 0) return;
     this.save.update((d) => {
-      d.materials += amount;
+      d.stars += amount;
     });
   }
 
   trySpendCoins(amount: number): boolean {
-    if (amount > this.coins) return false;
+    if (amount < 0 || amount > this.coins) return false;
+    if (amount === 0) return true;
     this.save.update((d) => {
       d.coins -= amount;
     });
     return true;
   }
-  
-  trySpendMaterials(amount: number): boolean {
-    if (amount > this.materials) return false;
+
+  trySpendStars(amount: number): boolean {
+    if (amount < 0 || amount > this.stars) return false;
+    if (amount === 0) return true;
     this.save.update((d) => {
-      d.materials -= amount;
+      d.stars -= amount;
     });
     return true;
   }
@@ -68,16 +71,6 @@ export class SavedWallet implements Wallet {
       if (data.coins !== last) {
         last = data.coins;
         listener(data.coins);
-      }
-    });
-  }
-  
-  onMaterialsChange(listener: (materials: number) => void): () => void {
-    let last = this.materials;
-    return this.save.onChange((data) => {
-      if (data.materials !== last) {
-        last = data.materials;
-        listener(data.materials);
       }
     });
   }

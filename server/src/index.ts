@@ -7,6 +7,7 @@ import { buildApp } from './app';
 import { loadConfig } from './env';
 import { LevelCatalog, readLevelFiles } from './levels';
 import { PrismaStore } from './prismaStore';
+import { RevenueCatVerifier } from './purchases';
 
 const LEVEL_REFRESH_MS = 5 * 60_000;
 
@@ -36,10 +37,12 @@ async function main(): Promise<void> {
     sessionDays: config.sessionDays,
     registerPerHour: config.registerPerHour,
     loginPer10Min: config.loginPer10Min,
+    purchaseVerifier: config.revenueCatSecretKey ? new RevenueCatVerifier(config.revenueCatSecretKey) : null,
+    sandboxPurchases: config.devCommands,
   });
   await app.listen({ port: config.port, host: '0.0.0.0' });
   console.log(
-    `Kaptan Pati sunucusu: http://localhost:${config.port} · ${catalog.count} seviye · geliştirici komutları ${config.devCommands ? 'açık' : 'kapalı'}`,
+    `Kaptan Pati sunucusu: http://localhost:${config.port} · ${catalog.count} seviye · geliştirici komutları ${config.devCommands ? 'açık' : 'kapalı'} · ödeme doğrulama ${config.revenueCatSecretKey ? 'açık' : 'kapalı'}`,
   );
 
   const shutdown = async () => {

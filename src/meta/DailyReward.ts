@@ -1,7 +1,5 @@
-import { ECONOMY, type DailyRewardConfig } from '../config/economy';
+import { ECONOMY, type DailyRewardConfig, type RewardBundle } from '../config/economy';
 import type { SaveService } from '../services/SaveService';
-import type { Wallet } from '../services/Wallet';
-import type { Inventory } from './Inventory';
 import type { Clock } from './Lives';
 
 /** Saat dilimi farkı (dakika, Date.getTimezoneOffset biçiminde: İstanbul = -180). */
@@ -35,8 +33,8 @@ export class DailyReward {
 
   constructor(
     private readonly save: SaveService,
-    private readonly wallet: Wallet,
-    private readonly inventory: Inventory,
+    /** Ödülü kayda işler (altın, yıldız, eşya…; bkz. rewards.ts grantBundle). */
+    private readonly grant: (bundle: RewardBundle) => void,
     private readonly now: Clock = Date.now,
     private readonly tz: TzOffset = localTz,
   ) {}
@@ -66,8 +64,7 @@ export class DailyReward {
     this.save.update((d) => {
       d.daily = { lastClaim: today, streak };
     });
-    if (reward.coins) this.wallet.addCoins(reward.coins);
-    if (reward.items) this.inventory.add(reward.items);
+    this.grant(reward);
     return reward;
   }
 

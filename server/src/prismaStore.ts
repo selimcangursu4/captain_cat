@@ -1,9 +1,22 @@
 import { PrismaPg } from '@prisma/adapter-pg';
 import type { SaveData } from '../../src/services/SaveService';
 import { Prisma, PrismaClient } from '../generated/prisma/client';
-import { EmailTakenError, type EventRecord, type LevelRow, type SaveRecord, type SessionRecord, type Store, type UserRecord } from './store';
+import {
+  EmailTakenError,
+  type EventRecord,
+  type LevelRow,
+  type PurchaseOutcome,
+  type PurchaseRecord,
+  type SaveRecord,
+  type SessionRecord,
+  type Store,
+  type UserRecord,
+} from './store';
 
 const json = (value: unknown) => value as Prisma.InputJsonValue;
+
+/** İşlem içinde kayıt başka bir istekçe değiştirildi: işlem geri alınır. */
+class RevisionConflict extends Error {}
 
 /** PostgreSQL deposu (Prisma 7 + pg sürücü adaptörü). */
 export class PrismaStore implements Store {
@@ -74,6 +87,24 @@ export class PrismaStore implements Store {
     await this.db.gameEvent.createMany({
       data: events.map((e) => ({ userId, type: e.type, payload: json(e.payload), clientAt: e.clientAt, accepted: e.accepted, reason: e.reason })),
     });
+  }
+
+  async recordPurchase(userId: string, purchase: PurchaseRecord, expectedRevision: number, data: SaveData): Promise<PurchaseOutcome> {
+    try {
+      await this.db.$transaction(async (tx) => {
+        await tx.purchase.create({ data: { userId, ...purchase } });
+        const result = await tx.gameSave.updateMany({
+          where: { userId, revision: expectedRevision },
+          data: { data: json(data), revision: expectedRevision + 1, level: data.level, stars: data.stars, coins: data.coins },
+        });
+        if (result.count !== 1) throw new RevisionConflict();
+      });
+      return 'ok';
+    } catch (error) {
+      if (error instanceof RevisionConflict) return 'conflict';
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') return 'duplicate';
+      throw error;
+    }
   }
 
   listLevels(afterId: number): Promise<LevelRow[]> {

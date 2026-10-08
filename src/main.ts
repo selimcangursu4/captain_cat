@@ -6,6 +6,7 @@ import Phaser from 'phaser';
 import { DISPLAY } from './config/display';
 import { t } from './i18n';
 import { expireSession, loadCachedLevels, refreshLevels, restoreSession } from './net/account';
+import { retryPendingPurchases } from './net/purchases';
 import { dispatch, sync } from './net/sync';
 import { AuthScene } from './scenes/AuthScene';
 import { BootScene } from './scenes/BootScene';
@@ -86,7 +87,13 @@ waitForFonts()
     if (session) {
       void sync.syncNow();
       void refreshLevels();
+      void retryPendingPurchases();
     }
+    // Sunucuya ulaşamamış ödemeler bağlantı gelince ya da uygulama öne gelince yeniden gönderilir.
+    window.addEventListener('online', () => void retryPendingPurchases());
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) void retryPendingPurchases();
+    });
 
     // Yalnızca geliştirme: tarayıcı konsolundan / otomasyon testlerinden oyuna ve kayda erişim.
     if (import.meta.env.DEV) {

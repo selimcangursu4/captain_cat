@@ -10,6 +10,7 @@ export const levelProgress = game.levels;
 export const townProgress = game.town;
 export const inventory = game.inventory;
 export const dailyReward = game.daily;
+export const market = game.market;
 
 /** İstemcideki komut kuralları (sunucunun kurallarıyla aynı; seviye bilgisi pakete gömülü seviyelerden). */
 export const clientRules: CommandRules = {

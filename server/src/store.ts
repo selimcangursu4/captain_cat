@@ -28,6 +28,17 @@ export interface EventRecord {
   readonly reason?: string;
 }
 
+/** Gerçek parayla yapılan, doğrulanmış satın alma. */
+export interface PurchaseRecord {
+  readonly transactionId: string;
+  readonly productId: string;
+  readonly coins: number;
+  readonly sandbox: boolean;
+}
+
+/** ok: işlendi; duplicate: bu işlem daha önce işlenmiş; conflict: kayıt bu arada değişti (yeniden dene). */
+export type PurchaseOutcome = 'ok' | 'duplicate' | 'conflict';
+
 export interface LevelRow {
   readonly id: number;
   readonly data: unknown;
@@ -59,6 +70,11 @@ export interface Store {
   /** İyimser kilit: kayıt hâlâ expectedRevision'daysa yazar ve revision'ı artırır; değilse false. */
   writeSave(userId: string, expectedRevision: number, data: SaveData): Promise<boolean>;
   logEvents(userId: string, events: readonly EventRecord[]): Promise<void>;
+  /**
+   * Satın almayı ve ürünün işlendiği kaydı tek işlemde yazar (iyimser kilit: kayıt hâlâ
+   * expectedRevision'daysa). Aynı transactionId ikinci kez gelirse hiçbir şey yazmaz: 'duplicate'.
+   */
+  recordPurchase(userId: string, purchase: PurchaseRecord, expectedRevision: number, data: SaveData): Promise<PurchaseOutcome>;
 
   listLevels(afterId: number): Promise<LevelRow[]>;
   upsertLevels(levels: readonly LevelRow[]): Promise<void>;
@@ -72,6 +88,7 @@ export class MemoryStore implements Store {
   readonly sessions = new Map<string, SessionRecord>();
   readonly saves = new Map<string, { data: unknown; revision: number }>();
   readonly events: (EventRecord & { userId: string })[] = [];
+  readonly purchases = new Map<string, PurchaseRecord & { userId: string }>();
   readonly levels = new Map<number, unknown>();
 
   async createUser(input: { email: string; displayName: string; passwordHash: string }, save: SaveData): Promise<UserRecord> {
@@ -123,6 +140,13 @@ export class MemoryStore implements Store {
 
   async logEvents(userId: string, events: readonly EventRecord[]): Promise<void> {
     this.events.push(...events.map((e) => ({ ...e, userId })));
+  }
+
+  async recordPurchase(userId: string, purchase: PurchaseRecord, expectedRevision: number, data: SaveData): Promise<PurchaseOutcome> {
+    if (this.purchases.has(purchase.transactionId)) return 'duplicate';
+    if (!(await this.writeSave(userId, expectedRevision, data))) return 'conflict';
+    this.purchases.set(purchase.transactionId, { ...purchase, userId });
+    return 'ok';
   }
 
   async listLevels(afterId: number): Promise<LevelRow[]> {

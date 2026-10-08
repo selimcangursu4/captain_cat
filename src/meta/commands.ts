@@ -1,6 +1,21 @@
-import { BOOSTER_IDS, ECONOMY, HELPER_IDS, ITEM_IDS, type BoosterId, type HelperId, type ItemId } from '../config/economy';
+import {
+  BOOSTER_IDS,
+  CHEST_IDS,
+  ECONOMY,
+  HELPER_IDS,
+  ITEM_IDS,
+  MATERIAL_IDS,
+  SHIP_UPGRADE_IDS,
+  type BoosterId,
+  type ChestId,
+  type HelperId,
+  type ItemId,
+  type MaterialId,
+  type ShipUpgradeId,
+} from '../config/economy';
 import { OBSTACLE_CONFIG } from '../config/obstacles';
 import type { GameServices } from './game';
+import { extraMovesBought, extraMovesCost } from './pricing';
 
 /**
  * Oyuncunun ekonomiyi değiştiren her işlemi bir komuttur. İstemci komutu hemen yerelde uygular
@@ -8,7 +23,10 @@ import type { GameServices } from './game';
  * kendi kaydında yeniden oynatır. Kural tek yerde olduğu için istemci ve sunucu ayrışmaz;
  * kurala uymayan komut (hile ya da bozuk istemci) sunucuda reddedilir.
  *
- * `at`: komutun anı (ms). Can yenilenmesi ve günlük ödül bu ana göre hesaplanır.
+ * Gerçek parayla alınan altın komut değildir: sunucu ödemeyi mağazadan doğrulayıp kayda kendisi
+ * işler (server/src/app.ts POST /purchases). Böylece istemci kendine altın yazamaz.
+ *
+ * `at`: komutun anı (ms). Can yenilenmesi, inşaat süresi ve günlük ödül bu ana göre hesaplanır.
  */
 export type Command =
   | { readonly type: 'claimUnlocks'; readonly level: number; readonly at: number }
@@ -18,22 +36,24 @@ export type Command =
   | { readonly type: 'winLevel'; readonly level: number; readonly coins: number; readonly at: number }
   | { readonly type: 'loseLevel'; readonly level: number; readonly at: number }
   | { readonly type: 'buyPack'; readonly item: ItemId; readonly at: number }
+  | { readonly type: 'buySingleItem'; readonly item: ItemId; readonly at: number }
   | { readonly type: 'refillLives'; readonly at: number }
   | { readonly type: 'buyOneLife'; readonly at: number }
-  | { readonly type: 'buySingleItem'; readonly item: ItemId; readonly at: number }
-  | { readonly type: 'buyMissingMaterial'; readonly missingAmount: number; readonly at: number }
-  | { readonly type: 'buyChest'; readonly chestId: string; readonly at: number }
-  | { readonly type: 'buyShipUpgrade'; readonly upgradeId: string; readonly at: number }
-  | { readonly type: 'buyPiggyBank'; readonly at: number }
   | { readonly type: 'claimDaily'; readonly tz: number; readonly at: number }
   | { readonly type: 'build'; readonly task: string; readonly design: number; readonly at: number }
+  | { readonly type: 'finishBuild'; readonly at: number }
+  | { readonly type: 'speedUpBuild'; readonly at: number }
+  | { readonly type: 'fillMaterials'; readonly task: string; readonly currency: 'stars' | 'coins'; readonly at: number }
   | { readonly type: 'changeDesign'; readonly task: string; readonly design: number; readonly at: number }
-  | { readonly type: 'buyCoinsPack'; readonly coins: number; readonly at: number }
+  | { readonly type: 'buyMaterial'; readonly material: MaterialId; readonly bundle: number; readonly at: number }
+  | { readonly type: 'buyStars'; readonly pack: number; readonly at: number }
+  | { readonly type: 'openChest'; readonly chest: ChestId; readonly at: number }
+  | { readonly type: 'upgradeShip'; readonly upgrade: ShipUpgradeId; readonly at: number }
+  | { readonly type: 'resetProgress'; readonly at: number }
   // Yalnızca geliştirme sunucusunda kabul edilir (DEV_COMMANDS=1).
   | { readonly type: 'devAddStars'; readonly amount: number; readonly at: number }
   | { readonly type: 'devSetLevel'; readonly level: number; readonly at: number }
-  | { readonly type: 'devStartLevel'; readonly level: number; readonly at: number }
-  | { readonly type: 'devReset'; readonly at: number };
+  | { readonly type: 'devStartLevel'; readonly level: number; readonly at: number };
 
 export type CommandType = Command['type'];
 
@@ -51,23 +71,30 @@ export interface CommandRules {
 
 export const DEFAULT_MIN_LEVEL_MS = 3000;
 
-/** Bir seviyeyi kazanınca alınabilecek en fazla altın (bölüm altını + her hamle bonus + sandıklar). */
+/**
+ * Bir seviyeyi kazanınca bildirilebilecek en fazla bölüm altını: bölüm altını + her hamle (ek hamleler
+ * dahil) bonus + sandıklar. Gemi gövdesi bonusunu istemci değil kural ekler (LevelProgress.recordWin).
+ */
 export function maxWinCoins(moves: number, extraMoves: number, chests: number): number {
-  return (ECONOMY.levelWinCoins + (moves + extraMoves) * ECONOMY.coinsPerBonusMove + chests * OBSTACLE_CONFIG.chestCoins) * 2;
+  return ECONOMY.levelWinCoins + (moves + extraMoves) * ECONOMY.coinsPerBonusMove + chests * OBSTACLE_CONFIG.chestCoins;
 }
 
 const fail = (reason: string): CommandResult => ({ ok: false, reason });
 const ok = (value?: unknown): CommandResult => ({ ok: true, value });
+const fromResult = (r: { readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly reason: string }): CommandResult =>
+  r.ok ? ok(r.value) : fail(r.reason);
 
 /**
  * Komutu oyun servislerine uygular. Başarısız komut kaydı değiştirmez (önce koşullar denetlenir).
- * Saat komutun anına sabitlenir.
+ * Saat komutun anına sabitlenir; başarılı komut kaydın saatini ileri taşır.
  */
 export function applyCommand(game: GameServices, cmd: Command, rules: CommandRules): CommandResult {
   game.clock.fixed = cmd.at;
   game.clock.tz = cmd.type === 'claimDaily' ? cmd.tz : null;
   try {
-    return run(game, cmd, rules);
+    const result = run(game, cmd, rules);
+    if (result.ok && cmd.at > game.save.data.clock) game.save.update((d) => void (d.clock = cmd.at));
+    return result;
   } finally {
     game.clock.fixed = null;
     game.clock.tz = null;
@@ -75,7 +102,7 @@ export function applyCommand(game: GameServices, cmd: Command, rules: CommandRul
 }
 
 function run(game: GameServices, cmd: Command, rules: CommandRules): CommandResult {
-  const { save, lives, inventory, levels, town, daily, wallet } = game;
+  const { save, lives, inventory, levels, town, daily, wallet, market } = game;
   const data = save.data;
 
   switch (cmd.type) {
@@ -100,11 +127,12 @@ function run(game: GameServices, cmd: Command, rules: CommandRules): CommandResu
 
     case 'buyExtraMoves': {
       if (!data.attempt) return fail('no-attempt');
-      if (!wallet.trySpendCoins(ECONOMY.extraMoves.cost)) return fail('coins');
+      const cost = extraMovesCost(extraMovesBought(data.attempt.extraMoves));
+      if (!wallet.trySpendCoins(cost)) return fail('coins');
       save.update((d) => {
         if (d.attempt) d.attempt.extraMoves += ECONOMY.extraMoves.count;
       });
-      return ok();
+      return ok(cost);
     }
 
     case 'useItem': {
@@ -143,75 +171,14 @@ function run(game: GameServices, cmd: Command, rules: CommandRules): CommandResu
 
     case 'buySingleItem': {
       if (!inventory.isUnlocked(cmd.item)) return fail('item-locked');
-      const itemConfig = ECONOMY.items[cmd.item];
-      if (!wallet.trySpendCoins(itemConfig.singlePrice)) return fail('coins');
-      save.update((d) => {
-        d.inventory[cmd.item] = (d.inventory[cmd.item] || 0) + 1;
-      });
-      return ok();
-    }
-
-    case 'buyMissingMaterial': {
-      const cost = cmd.missingAmount * ECONOMY.missingMaterialGoldCost;
-      if (!wallet.trySpendCoins(cost)) return fail('coins');
-      save.update((d) => {
-        d.materials += cmd.missingAmount;
-      });
-      return ok();
-    }
-
-    case 'buyChest': {
-      const chestConfig = Object.values(ECONOMY.chests).find(c => c.id === cmd.chestId);
-      if (!chestConfig) return fail('chest-unknown');
-      if (!wallet.trySpendCoins(chestConfig.priceGold)) return fail('coins');
-      
-      save.update((d) => {
-        d.materials += chestConfig.guaranteedMaterial;
-        // Opsiyonel: Sandık içinden çıkan rastgele eşyaları (booster vs.) da burada d'ye ekleyebiliriz.
-      });
-      return ok();
-    }
-
-    case 'buyShipUpgrade': {
-      // TypeScript type assertion required for shipUpgrades as it's an object with known keys
-      const config = (ECONOMY.shipUpgrades as Record<string, any>)[cmd.upgradeId];
-      if (!config) return fail('upgrade-unknown');
-      const currentLevel = data.ship[cmd.upgradeId] || 0;
-      if (currentLevel >= config.maxLevel) return fail('max-level');
-      
-      const nextLevelConfig = config.levels.find((l: any) => l.level === currentLevel + 1);
-      if (!nextLevelConfig) return fail('level-config-missing');
-      
-      if (data.materials < nextLevelConfig.costMaterial) return fail('materials');
-      if (nextLevelConfig.costGold > 0 && data.coins < nextLevelConfig.costGold) return fail('coins');
-      
-      if (nextLevelConfig.costGold > 0) {
-        if (!wallet.trySpendCoins(nextLevelConfig.costGold)) return fail('coins');
-      }
-      
-      save.update((d) => {
-        d.materials -= nextLevelConfig.costMaterial;
-        d.ship[cmd.upgradeId] = currentLevel + 1;
-      });
-      return ok();
-    }
-
-    case 'buyPiggyBank': {
-      const piggy = data.piggyBank?.coins || 0;
-      if (piggy < ECONOMY.piggyBank.maxCoins) return fail('piggy-not-full');
-      if (data.coins < ECONOMY.piggyBank.priceGold) return fail('coins');
-
-      save.update((d) => {
-        d.coins -= ECONOMY.piggyBank.priceGold;
-        d.coins += piggy;
-        if (d.piggyBank) d.piggyBank.coins = 0;
-      });
+      if (!wallet.trySpendCoins(ECONOMY.items[cmd.item].singlePrice)) return fail('coins');
+      inventory.add({ [cmd.item]: 1 });
       return ok();
     }
 
     case 'refillLives':
       return lives.buyRefill() ? ok() : fail('refill');
-      
+
     case 'buyOneLife':
       return lives.buyOneLife() ? ok() : fail('refill');
 
@@ -225,21 +192,45 @@ function run(game: GameServices, cmd: Command, rules: CommandRules): CommandResu
       return result.ok ? ok(result) : fail(result.reason);
     }
 
+    case 'finishBuild': {
+      const result = town.finish();
+      return result.ok ? ok(result) : fail(result.reason);
+    }
+
+    case 'speedUpBuild': {
+      const result = town.speedUp();
+      return result.ok ? ok(result) : fail(result.reason);
+    }
+
+    case 'fillMaterials': {
+      const result = town.fillMissing(cmd.task, cmd.currency);
+      return result.ok ? ok(result) : fail(result.reason);
+    }
+
     case 'changeDesign':
       return town.changeDesign(cmd.task, cmd.design) ? ok() : fail('not-built');
 
-    case 'buyCoinsPack': {
-      save.update((d) => void (d.coins += cmd.coins));
+    case 'buyMaterial':
+      return fromResult(market.buyMaterial(cmd.material, cmd.bundle));
+
+    case 'buyStars':
+      return fromResult(market.buyStars(cmd.pack));
+
+    case 'openChest':
+      return fromResult(market.openChest(cmd.chest));
+
+    case 'upgradeShip':
+      return fromResult(market.upgradeShip(cmd.upgrade));
+
+    case 'resetProgress':
+      save.reset();
       return ok();
-    }
 
     case 'devAddStars':
     case 'devSetLevel':
-    case 'devStartLevel':
-    case 'devReset': {
+    case 'devStartLevel': {
       if (!rules.allowDev) return fail('dev-disabled');
-      if (cmd.type === 'devReset') save.reset();
-      else if (cmd.type === 'devAddStars') save.update((d) => void (d.stars += cmd.amount));
+      if (cmd.type === 'devAddStars') save.update((d) => void (d.stars += cmd.amount));
       else if (cmd.type === 'devSetLevel') save.update((d) => void (d.level = cmd.level));
       else {
         if (!rules.level(cmd.level)) return fail('level-unknown');
@@ -257,6 +248,7 @@ function run(game: GameServices, cmd: Command, rules: CommandRules): CommandResu
 const isInt = (v: unknown, min = -Infinity, max = Infinity): v is number =>
   typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
 const oneOf = <T extends string>(list: readonly T[], v: unknown): v is T => (list as readonly unknown[]).includes(v);
+const isTaskId = (v: unknown): v is string => typeof v === 'string' && v.length <= 64;
 
 /** Ağdan gelen ham komutu doğrular; biçimi bozuksa null (sunucu "invalid" olarak reddeder). */
 export function parseCommand(raw: unknown): Command | null {
@@ -277,34 +269,37 @@ export function parseCommand(raw: unknown): Command | null {
     case 'buyExtraMoves':
     case 'refillLives':
     case 'buyOneLife':
-    case 'devReset':
+    case 'finishBuild':
+    case 'speedUpBuild':
+    case 'resetProgress':
       return { type: c.type, at };
     case 'useItem':
       return oneOf(HELPER_IDS, c.item) ? { type: 'useItem', item: c.item, at } : null;
     case 'winLevel':
       return isInt(c.level, 1, 100_000) && isInt(c.coins, 0, 1_000_000) ? { type: 'winLevel', level: c.level, coins: c.coins, at } : null;
     case 'buyPack':
-      return oneOf(ITEM_IDS, c.item) ? { type: 'buyPack', item: c.item, at } : null;
     case 'buySingleItem':
-      return oneOf(ITEM_IDS, c.item) ? { type: 'buySingleItem', item: c.item, at } : null;
-    case 'buyMissingMaterial':
-      return isInt(c.missingAmount, 1, 1000) ? { type: 'buyMissingMaterial', missingAmount: c.missingAmount, at } : null;
-    case 'buyChest':
-      return typeof c.chestId === 'string' ? { type: 'buyChest', chestId: c.chestId, at } : null;
-    case 'buyShipUpgrade':
-      return typeof c.upgradeId === 'string' ? { type: 'buyShipUpgrade', upgradeId: c.upgradeId, at } : null;
-    case 'buyPiggyBank':
-      return { type: 'buyPiggyBank', at };
+      return oneOf(ITEM_IDS, c.item) ? { type: c.type, item: c.item, at } : null;
     case 'claimDaily':
       // Gerçek saat dilimleri -14 ile +12 saat arasıdır.
       return isInt(c.tz, -840, 720) ? { type: 'claimDaily', tz: c.tz, at } : null;
     case 'build':
     case 'changeDesign':
-      return typeof c.task === 'string' && c.task.length <= 64 && isInt(c.design, 0, 2)
-        ? { type: c.type, task: c.task, design: c.design, at }
+      return isTaskId(c.task) && isInt(c.design, 0, 2) ? { type: c.type, task: c.task, design: c.design, at } : null;
+    case 'fillMaterials':
+      return isTaskId(c.task) && (c.currency === 'stars' || c.currency === 'coins')
+        ? { type: 'fillMaterials', task: c.task, currency: c.currency, at }
         : null;
-    case 'buyCoinsPack':
-      return isInt(c.coins, 1, 100_000) ? { type: 'buyCoinsPack', coins: c.coins, at } : null;
+    case 'buyMaterial':
+      return oneOf(MATERIAL_IDS, c.material) && isInt(c.bundle, 0, ECONOMY.market.length - 1)
+        ? { type: 'buyMaterial', material: c.material, bundle: c.bundle, at }
+        : null;
+    case 'buyStars':
+      return isInt(c.pack, 0, ECONOMY.starPacks.length - 1) ? { type: 'buyStars', pack: c.pack, at } : null;
+    case 'openChest':
+      return oneOf(CHEST_IDS, c.chest) ? { type: 'openChest', chest: c.chest, at } : null;
+    case 'upgradeShip':
+      return oneOf(SHIP_UPGRADE_IDS, c.upgrade) ? { type: 'upgradeShip', upgrade: c.upgrade, at } : null;
     case 'devAddStars':
       return isInt(c.amount, 1, 100) ? { type: 'devAddStars', amount: c.amount, at } : null;
     default:

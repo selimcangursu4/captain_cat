@@ -30,7 +30,7 @@ describe('SaveService', () => {
       town: { region: 1, built: { a: 1, b: 9, c: 'x' }, chests: ['lighthouse', 5] },
     });
     expect(data).toMatchObject({ version: SAVE_VERSION, level: 7, stars: 0, coins: defaultSave().coins });
-    expect(data.town).toEqual({ region: 1, built: { a: 1 }, chests: ['lighthouse'] });
+    expect(data.town).toEqual({ region: 1, built: { a: 1 }, chests: ['lighthouse'], construction: null });
   });
 
   it('güncellemeler önceki durumu değiştirmez (değişmez anlık görüntü)', () => {

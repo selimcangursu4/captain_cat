@@ -35,7 +35,7 @@ Aşama 10'da, gerçek ödeme Aşama 11'de.
 Geliştirme modunda (sunucuda `DEV_COMMANDS=1`):
 
 - oyun ekranının altında seviye geçişi (can harcamaz) ve "Özel Taşlar" (her güçlendiriciyi tahtaya koyar),
-- ana ekranın altında "+5 Yıldız" ve "Kaydı Sıfırla" butonları vardır (geliştirici komutlarıyla çalışır),
+- mağazada gerçek ödeme yerine deneme alımı yapılır (sunucuda doğrulamasız, `sandbox`),
 - tarayıcı konsolunda `__kaptan` (Phaser), `__kaptanSave` (kayıt), `__kaptanSync` (eşitleme) ve
   `__kaptanDispatch` (komut gönderme) bulunur, ör. `__kaptanDispatch({ type: 'devSetLevel', level: 20 })`.
   Kaydı doğrudan değiştirmek (`__kaptanSave.update`) sunucuya gitmez; ilk eşitlemede geri alınır.
@@ -61,8 +61,8 @@ tools/        Denge botu (npm run balance), seviye üretici (npm run levels, too
 
 Ekran akışı: açılış → (oturum yoksa giriş/kayıt) → ana ekran (kasaba; günün ilk girişinde günlük ödül) → "Oyna" → yeni açılan
 eşyaların tanıtımı → bölüm başlangıç penceresi (hedefler + güçlendirici seçimi) → bölüm →
-kazan/kaybet → ana ekran. Kazanınca +1 yıldız (yalnızca ilk kez geçilen bölümde) ve altın;
-yıldızlar kasabada harcanır.
+kazan/kaybet → ana ekran. Yeni bir bölümü kazanınca +1 yıldız, kasabaya malzeme ve altın gelir;
+yıldızlar Pazar'da malzemeye, malzemeler kasabadaki inşaatlara harcanır.
 
 Akış: girdi → `Match3Engine.trySwap()` / `activateAt()` sonucu anında hesaplar ve bir olay
 listesi döndürür → `StepPlayer` + `BoardView` bu olayları sırayla oynatır. Her zincir adımı:
@@ -184,65 +184,98 @@ düzeltilmişler dahil) dokunulmaz.
 ## Kasaba
 
 5 bölge sırayla açılır: Deniz Feneri → İskele → Balıkçı Dükkânı → Kafe → Kaptan'ın Gemisi.
-Her bölgede 5-8 görev vardır, bölge içinde sırayla yapılır ve yıldız bedeli 1'den 5'e çıkar.
+Her bölgede 5-8 görev vardır ve bölge içinde sırayla yapılır.
 
-- Her görevin 3 tasarımı vardır: Klasik, Okyanus, Gün Batımı. Oyuncu yaparken birini seçer.
-- Yapılmış bir parçaya dokunarak (veya görev listesinden "Değiştir" ile) tasarımı ücretsiz değiştirilebilir.
-- Her görev bitince Kaptan Pati komik bir replik söyler.
-- Bölge bitince sandık açılır, altın verilir ve sıradaki bölge açılır. Bitmiş bölgeler ◀ ▶ oklarıyla gezilebilir.
+- **Görev = malzeme + süre.** Her görevin bir tarifi vardır (ör. "Kapıyı yerleştir": 10 odun + 5 çivi) ve
+  inşaatı belli bir süre sürer (fener: 1-15 dk, iskele: 15 dk-1 sa … gemi: 2-8 sa). Aynı anda tek inşaat yapılır.
+- **Bölge kilidi:** bölgenin bütün inşaatları bitmeden (süreleri dolmadan) sıradaki bölge açılmaz; yeterli
+  malzeme/yıldız olsa bile beklemek gerekir.
+- **Hızlandırma (zaman atlama):** beklemek istemeyen altınla hemen bitirir. Bedel kalan süreye göre artar
+  (≈1 dk: 10, 1 sa: 265, 2 sa: 465 altın); son 30 saniye ücretsizdir. Süre dolunca inşaat kendiliğinden biter.
+- **Eksik malzeme:** inşaat penceresinde eksikler yıldızla ya da doğrudan altınla tek dokunuşla tamamlanır.
+- Süren inşaat kasaba sahnesinde iskele, sallanan çekiç ve geri sayımla görünür; dokununca hızlandırma penceresi açılır.
+- Her görevin 3 tasarımı vardır: Klasik, Okyanus, Gün Batımı. Bitmiş bir parçaya dokunarak (veya görev
+  listesinden "Değiştir" ile) tasarım ücretsiz değiştirilir.
+- **Liman haritası:** ana ekran bölgeleri adacıklar üzerinde, aralarında kıvrılan bir rotayla gösterir
+  (bitmiş ✓, şu anki bölge nabız atar ve ilerlemesi/süren inşaatı görünür, kilitliler gri). Bir bölgeye
+  dokununca o bölgenin sahnesi açılır: eski bölgelerde yapılanlar, şu anki bölgede süren inşaat; ◀ Harita ile dönülür.
+- Her inşaat bitince Kaptan Pati komik bir replik söyler; bölge bitince sandık açılır, altın verilir ve
+  haritada sıradaki bölgeye giden rota açılır.
 
-| Bölge | Görev | Toplam yıldız | Sandık |
-|---|---|---|---|
-| Deniz Feneri | 5 | 7 | 100 altın |
-| İskele | 6 | 13 | 150 altın |
-| Balıkçı Dükkânı | 6 | 16 | 200 altın |
-| Kafe | 7 | 23 | 250 altın |
-| Kaptan'ın Gemisi | 8 | 32 | 400 altın |
-
-Toplam 91 yıldız gerekir, 30 bölüm 30 yıldız verir: sonraki bölgeler yeni bölümler eklendikçe açılır.
-Görev ve bedeller: `src/meta/town.ts`. Bölge çizimleri: `src/assets/svg/town/`.
+Malzemeler: odun, taş, çivi, halat, boya, cam, kumaş. Tarifler ve süreler: `src/meta/town.ts`.
+Bölge çizimleri: `src/assets/svg/town/`.
 
 Bölge dokuları yalnızca o bölge gösterilirken üretilir ve başka bölgeye geçince bellekten
 silinir (`lazy` manifest girdileri), böylece 96 parça görseli açılışı yavaşlatmaz.
 
 ## Ekonomi
 
-Tüm sayılar `src/config/economy.ts` içindedir.
+Tüm sayılar `src/config/economy.ts`, fiyat formülleri `src/meta/pricing.ts` içindedir.
+
+```
+Gerçek para ──(Mağaza)──▶ Altın ──(Pazar: takas)──▶ Yıldız ──(Pazar)──▶ Malzeme ──▶ İnşaat
+                            │                          ▲                   ▲
+                            │                    seviye geçmek       seviye, sandık
+                            ├──▶ can, ek hamle, güçlendirici, sandık, gemi yükseltmesi
+                            └──▶ inşaatı hızlandırma, eksik malzemeyi doğrudan tamamlama
+```
+
+**Yeni seviye ödülü:** +1 yıldız, kasabanın o an en çok ihtiyaç duyduğu malzemeden 3 adet (sıradaki
+görevde en çok eksik olan), +1 can, bölüm altını (20 + kalan hamle başına 3 + sandıklar) ve kumbaraya 25 altın.
 
 **Can:** zamanla en fazla 5'e kadar dolar; seviye ödülü canlarıyla 10'a kadar birikebilir. Seviyeye
-başlarken 1 can harcanır, kazanınca geri verilir; yani can yalnızca kaybedince ya da seviyeden çıkınca
-(duraklat → Kasaba / Yeniden Başla) gider. Oyunu kapatmak canı kurtarmaz. 5'in altındaysa her 20
-dakikada 1 can gelir (oyun kapalıyken de; zaman damgasıyla hesaplanır, saat geri alınırsa bekleme
-20 dakikayı aşmaz). Can yoksa 120 altınla doldurulur.
+başlarken 1 can harcanır, kazanınca geri verilir; can yalnızca kaybedince ya da seviyeden çıkınca gider.
+5'in altındaysa her 20 dakikada 1 can gelir (oyun kapalıyken de). Altınla +1 can (50) ya da tam doldurma (200).
 
-**Altın:** bölüm sonu (20 + kalan hamle başına 3 + sandıklar), bölge sandıkları ve günlük ödülden
-kazanılır. Ekstra hamle, yardımcılar, güçlendiriciler ve can doldurma için harcanır.
+**Ek hamle:** hamleler bitince +5 hamle; aynı denemede her alımda fiyat artar (100, 150, 200…).
 
-**Eşyalar:** her biri bir bölümde açılır (öğretici bölümler bittikten sonra) ve açılınca 3 adet
-hediye edilir; bitince 3'lük paket altınla alınır.
+**Eşyalar:** her biri bir bölümde açılır ve açılınca 3 adet hediye edilir; bitince altınla alınır.
 
-| Eşya | Tür | Etki | Açılış | Paket (3) |
-|---|---|---|---|---|
-| Kürek | bölüm içi | seçilen tek kareyi kırar (engele vurur, güçlendiriciyi patlatır) | 11 | 150 |
-| Dümen | bölüm içi | dokunulan satırı temizler | 12 | 200 |
-| Fırtına | bölüm içi | tahtayı karıştırır | 13 | 100 |
-| Harpun | bölüm öncesi | tahtada hazır Harpunla başlanır | 14 | 150 |
-| Gülle | bölüm öncesi | tahtada hazır Gülleyle başlanır | 15 | 150 |
-| Girdap | bölüm öncesi | tahtada hazır Girdapla başlanır | 16 | 200 |
+| Eşya | Tür | Etki | Açılış | Paket (3) | Tek |
+|---|---|---|---|---|---|
+| Kürek | bölüm içi | seçilen tek kareyi kırar | 11 | 150 | 60 |
+| Dümen | bölüm içi | dokunulan satırı temizler | 12 | 200 | 80 |
+| Fırtına | bölüm içi | tahtayı karıştırır | 13 | 100 | 40 |
+| Harpun | bölüm öncesi | tahtada hazır Harpunla başlanır | 14 | 150 | 60 |
+| Gülle | bölüm öncesi | tahtada hazır Gülleyle başlanır | 15 | 150 | 60 |
+| Girdap | bölüm öncesi | tahtada hazır Girdapla başlanır | 16 | 200 | 80 |
 
-Bölüm içi yardımcılar hamle harcamaz ama hedeflere sayılır (bölümü bitirebilirler). Kürek ve
-Dümen seçilince tahtaya dokunmak hedef seçer; aynı yardımcıya tekrar dokununca vazgeçilir.
-Öğretici bölümlerde yardımcı çubuğu gizlidir.
+**Pazar** (ana ekranda tezgâh simgesi; yıldız sayacındaki "+" de açar), dört sekme:
 
-**Günlük ödül:** 7 günlük takvim (altın ve eşyalar). Günde bir kez alınır; art arda gelinirse
-sıradaki güne geçilir, bir gün atlanırsa 1. güne dönülür, 7. günden sonra baştan başlar.
+- **Malzeme:** her malzeme yıldızla; büyük pakette %20 fazlası (ör. 1 ⭐ = 6 odun, 5 ⭐ = 36 odun).
+- **Yıldız:** altınla yıldız (1 ⭐ = 120, 5 ⭐ = 550, 15 ⭐ = 1500 altın).
+- **Sandık:** Kaptan (250), Hazine (750), Efsane (2000) sandıkları: malzeme, altın, güçlendirici, can,
+  yıldız çıkar. Sonuç kayıttaki tohumla belirlenir: istemci ve sunucu aynı ödülü bulur, sandık "baştan
+  açılarak" seçilemez.
+- **Gemi atölyesi** (kalıcı, altınla): Gövde (bölüm altınına +%10/20/30), Ambar (seviye başına +1/2/3
+  malzeme), Motor (bölüme 1/2 hazır güçlendiriciyle başla).
 
-**Mağaza:** altın paketleri yalnızca arayüz olarak hazır; satın alma "yakında" der. Gerçek ödeme
-entegrasyonu sonra eklenecek.
+**Mağaza:** yalnızca gerçek parayla altın satılır (6 paket) ve kumbara: her yeni seviyede 25 altın biriktirir
+(en çok 1500); en az 500 birikince gerçek parayla kırılır.
+
+**Günlük ödül:** 7 günlük takvim (altın, eşya, yıldız). Günde bir kez; art arda gelinirse sıradaki güne,
+bir gün atlanırsa 1. güne dönülür.
+
+### Gerçek para (RevenueCat)
+
+Altın komutla yazılamaz; ödemeyi sunucu doğrular:
+
+1. Telefonda RevenueCat hesap kimliğiyle kurulur (`appUserID` = hesap) ve ürün mağazadan satın alınır.
+2. İstemci işlem kimliğini `POST /purchases` ile gönderir; sunucu ödemeyi RevenueCat REST API'den
+   (gizli anahtar `REVENUECAT_SECRET_KEY`) doğrular, altını esas kayda işler ve işlemi `Purchase`
+   tablosuna yazar. Aynı işlem ikinci kez altın vermez.
+3. Sunucuya ulaşılamazsa ödeme telefonda saklanır; bağlantı gelince, uygulama öne gelince ve mağaza
+   açılınca yeniden gönderilir.
+
+Yapılandırma: istemcide `VITE_REVENUECAT_ANDROID_KEY` / `VITE_REVENUECAT_IOS_KEY` (genel anahtarlar),
+sunucuda `REVENUECAT_SECRET_KEY`. Ürün kimlikleri `ECONOMY.shop` ve `ECONOMY.piggyBank.productId`
+ile aynı olmalı (Google Play'de tek seferlik, tüketilebilir ürün). Tarayıcıda (geliştirme) mağaza yoktur:
+sunucu `DEV_COMMANDS=1` iken deneme alımı yapılır.
 
 ## Ayarlar, ses ve titreşim
 
-Ayarlar (ana ekranda çark): ses efektleri, müzik, titreşim, dil (Türkçe / English). Duraklat
+Ayarlar (ana ekranda çark): ses efektleri, müzik, titreşim, dil (Türkçe / English) ve hesap
+(eşitleme durumu, çıkış, **Kaydı Sıfırla** — onay ister, bütün ilerlemeyi siler). Duraklat
 penceresinde de ses, müzik ve titreşim anahtarları vardır. Dil seçilmediyse cihaz dili kullanılır
 (Türkçe değilse İngilizce). Dil değişince ana ekran yeni dille yeniden çizilir.
 
@@ -298,8 +331,9 @@ ister; bunun için o an internet gerekir. Oturum telefonda saklanır; sonraki a�
 çıkışa izin verilmez (ilerleme kaybolmasın).
 
 **Komutlar** (`src/meta/commands.ts`): ekonomiyi değiştiren her işlem bir komuttur. Komutlar: seviyeye
-başla, kazan, kaybet, ek hamle, yardımcı kullan, paket al, can doldur, günlük ödül, inşa et, tasarım
-değiştir, eşya aç.
+başla, kazan, kaybet, ek hamle, yardımcı kullan, eşya al, can al, günlük ödül, inşaat başlat / bitir /
+hızlandır, eksik malzemeyi tamamla, tasarım değiştir, malzeme / yıldız al, sandık aç, gemi yükselt,
+kaydı sıfırla, eşya aç.
 
 - İstemci komutu hemen yerelde uygular ve telefondaki günlüğe yazar.
 - Sunucu aynı komutları **aynı kural koduyla** hesabın esas kaydında yeniden oynatır. Kural tek yerde
@@ -317,7 +351,9 @@ sunucunun kaydına döner. Kurallar:
 - Seviye başına altın sınırı vardır: bölüm altını, her hamle için bonus, sandıklar ve satın alınan
   ek hamleler dikkate alınır.
 - Açılmamış seviye oynanamaz; can, altın ya da eşya yetmiyorsa işlem yapılamaz.
-- Telefon saati ileri alınarak can üretilemez: sunucu saatinden 5 dakikadan ileri komut reddedilir.
+- Telefon saati ileri alınarak can üretilemez, inşaat bitirilemez: sunucu saatinden 5 dakikadan ileri komut reddedilir.
+- Saat geri alınarak inşaat geçmişte başlatılamaz: kaydın saati (son komut / son eşitleme anı) geriye gitmez.
+- Altın yalnızca doğrulanmış ödemeyle gelir (`POST /purchases`); bölüm altınındaki gemi bonusunu kural ekler.
 - Günlük ödül oyuncunun saat diliminde günde bir kez alınır.
 - Telefondaki kaydı elle değiştirmek işe yaramaz: ilk eşitlemede sunucunun kaydı geri gelir.
 - Her komut (kabul/ret ve nedeni) `GameEvent` tablosuna yazılır.
@@ -341,6 +377,7 @@ sunucunun kaydına döner. Kurallar:
 | `GET /me` | Hesap bilgisi |
 | `GET /save` | Esas kayıt |
 | `POST /sync` | Komutları gönderir, esas kaydı alır |
+| `POST /purchases` | Mağaza ödemesini doğrular, altını kayda işler |
 | `GET /levels?after=N` | Pakette olmayan yeni seviyeler |
 | `GET /health` | Sağlık |
 
@@ -352,6 +389,7 @@ sunucunun kaydına döner. Kurallar:
 | `Session` | Oturum |
 | `GameSave` | Esas kayıt (JSON); sıralama için seviye, yıldız ve altın ayrı sütunlarda |
 | `GameEvent` | Komut günlüğü |
+| `Purchase` | Doğrulanmış ödemeler (işlem kimliği tek) |
 | `Level` | Seviyeler |
 
 **Yeni seviye yayınlama (uygulama güncellemeden):**
@@ -365,7 +403,8 @@ Sunucu yeni seviyeleri 5 dakika içinde tanır. Oyuncular bağlandıklarında in
 ## Kayıt sistemi
 
 `SaveService`, oyuncunun ilerlemesini tek bir sürümlü JSON belgesi olarak tutar: seviye, yıldız, altın,
-kasaba, istatistikler, can, eşyalar, günlük ödül ve açık seviye denemesi (sürüm 3).
+malzemeler, kasaba (süren inşaat dahil), gemi, istatistikler, can, eşyalar, günlük ödül, açık seviye
+denemesi, kumbara, sandık tohumu ve kaydın saati (sürüm 6; sürüm 4-5'teki tek tür malzeme 25'te 1 yıldıza çevrilir).
 
 - Her hesabın telefondaki kaydı ayrı anahtardadır (`kaptan-pati/save/<hesap>`). Gönderilmemiş komutlar
   da ayrı tutulur (`kaptan-pati/journal/<hesap>`); uygulama kapanıp açılsa da kaybolmaz.

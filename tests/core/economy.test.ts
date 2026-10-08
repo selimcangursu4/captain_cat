@@ -5,7 +5,8 @@ import { tr } from '../../src/i18n/tr';
 import { DailyReward, dateKey } from '../../src/meta/DailyReward';
 import { Inventory } from '../../src/meta/Inventory';
 import { Lives } from '../../src/meta/Lives';
-import { MemorySaveStorage, SaveService, defaultSave, migrate } from '../../src/services/SaveService';
+import { grantBundle } from '../../src/meta/rewards';
+import { MemorySaveStorage, SAVE_VERSION, SaveService, defaultSave, migrate } from '../../src/services/SaveService';
 import { Settings, detectLanguage, parseSettings } from '../../src/services/Settings';
 import { SavedWallet } from '../../src/services/Wallet';
 
@@ -20,13 +21,14 @@ function setup(coins = 1000) {
   const clock = { now: new Date(2026, 9, 7, 10, 0).getTime() };
   const wallet = new SavedWallet(save);
   const inventory = new Inventory(save, wallet);
+  const lives = new Lives(save, wallet, () => clock.now);
   return {
     save,
     clock,
     wallet,
     inventory,
-    lives: new Lives(save, wallet, () => clock.now),
-    daily: new DailyReward(save, wallet, inventory, () => clock.now),
+    lives,
+    daily: new DailyReward(save, (bundle) => grantBundle(save, lives, bundle), () => clock.now),
   };
 }
 
@@ -85,7 +87,7 @@ describe('Lives', () => {
   });
 
   it('altınla doldurulur; altın yetmezse ya da can doluysa olmaz', () => {
-    const { lives, wallet } = setup(ECONOMY.lives.refillCost + 10);
+    const { lives, wallet } = setup(ECONOMY.lives.fullRefillCost + 10);
     expect(lives.buyRefill()).toBe(false); // zaten dolu
     lives.spend();
     lives.spend();
@@ -94,6 +96,17 @@ describe('Lives', () => {
     expect(wallet.coins).toBe(10);
     lives.spend();
     expect(lives.buyRefill()).toBe(false); // altın yok
+  });
+
+  it('tek can altınla alınır', () => {
+    const { lives, wallet } = setup(ECONOMY.lives.refillCost);
+    expect(lives.buyOneLife()).toBe(false); // dolu
+    lives.spend();
+    lives.spend();
+    expect(lives.buyOneLife()).toBe(true);
+    expect(lives.count).toBe(4);
+    expect(wallet.coins).toBe(0);
+    expect(lives.buyOneLife()).toBe(false);
   });
 });
 
@@ -145,7 +158,7 @@ describe('DailyReward', () => {
       daily.claim();
       clock.now += DAY;
     }
-    expect(inventory.count('cannon')).toBe(1);
+    expect(inventory.count('cannon')).toBe(ECONOMY.daily[5].items?.cannon);
     expect(daily.dayIndex).toBe(0); // 8. gün → yeniden 1. gün
     daily.claim();
     clock.now += DAY;
@@ -164,7 +177,7 @@ describe('kayıt sürümleri', () => {
     const v1 = { version: 1, level: 12, stars: 3, coins: 450, town: { region: 0, built: {}, chests: [] }, stats: { levelsWon: 11, levelsLost: 2 } };
     const data = migrate(v1);
     const base = defaultSave();
-    expect(data).toMatchObject({ version: 3, level: 12, stars: 3, coins: 450, attempt: null });
+    expect(data).toMatchObject({ version: SAVE_VERSION, level: 12, stars: 3, coins: 450, attempt: null });
     expect(data.lives).toEqual(base.lives);
     expect(data.inventory).toEqual(base.inventory);
     expect(data.daily).toEqual({ lastClaim: null, streak: 0 });
@@ -188,6 +201,25 @@ describe('kayıt sürümleri', () => {
     expect(data.attempt).toBeNull();
     expect(data).not.toHaveProperty('settings');
     expect(migrate({ attempt: { level: 4, startedAt: 10 } }).attempt).toEqual({ level: 4, startedAt: 10, extraMoves: 0 });
+  });
+
+  it('sürüm 5: tek tür malzeme yıldıza çevrilir; gemi, inşaat ve tohum düzeltilir', () => {
+    const data = migrate({
+      version: 5,
+      stars: 2,
+      materials: 130,
+      ship: { hull: 9, engine: -1, roket: 2 },
+      town: { region: 0, built: {}, chests: [], construction: { task: 'lighthouse.tower', design: 1, startedAt: 10, endsAt: 5 } },
+      rng: 'tohum',
+    });
+    expect(data.stars).toBe(2 + Math.floor(130 / ECONOMY.legacyMaterialsPerStar));
+    expect(data.materials).toEqual(defaultSave().materials);
+    expect(data.ship).toEqual({ hull: ECONOMY.ship.hull.levels.length, storage: 0, engine: 0 });
+    expect(data.town.construction).toBeNull(); // bitişi başlangıcından önce: bozuk
+    expect(data.rng).toBe(defaultSave().rng);
+    const ok = migrate({ town: { construction: { task: 'lighthouse.tower', design: 1, startedAt: 10, endsAt: 70 } }, rng: 42, clock: 99 });
+    expect(ok.town.construction).toEqual({ task: 'lighthouse.tower', design: 1, startedAt: 10, endsAt: 70 });
+    expect(ok).toMatchObject({ rng: 42, clock: 99 });
   });
 });
 

@@ -9,6 +9,8 @@ export interface TextButtonOptions {
   fontSize?: number;
   /** green: onay / satın alma gibi birincil eylemler. */
   variant?: 'orange' | 'green';
+  /** Yazının sağında simge (fiyat: altın, yıldız). */
+  icon?: string;
 }
 
 /** Buton dokusu 120x120; köşeler (9-dilim) sabit kalır, orta kısım gerilir. */
@@ -24,6 +26,7 @@ export class TextButton extends Phaser.GameObjects.Container {
   private readonly normal: Phaser.GameObjects.NineSlice;
   private readonly pressed: Phaser.GameObjects.NineSlice;
   private readonly label: Phaser.GameObjects.Text;
+  private readonly icon: Phaser.GameObjects.Image | null = null;
   private enabled = true;
 
   constructor(
@@ -56,6 +59,12 @@ export class TextButton extends Phaser.GameObjects.Container {
       })
       .setOrigin(0.5);
     this.add([this.normal, this.pressed, this.label]);
+    if (options.icon) {
+      const size = Math.round((options.fontSize ?? DEFAULTS.fontSize) * 1.25);
+      this.icon = scene.add.image(0, -6, options.icon).setDisplaySize(size, size);
+      this.add(this.icon);
+      this.layoutIcon();
+    }
 
     this.setSize(width, height);
     this.setInteractive({ useHandCursor: true });
@@ -79,12 +88,24 @@ export class TextButton extends Phaser.GameObjects.Container {
 
   setLabel(text: string): this {
     this.label.setText(text);
+    this.layoutIcon();
     return this;
+  }
+
+  /** Yazı + simge birlikte ortalanır. */
+  private layoutIcon(): void {
+    if (!this.icon) return;
+    const gap = 10;
+    const total = this.label.width + gap + this.icon.displayWidth;
+    this.label.setX(-total / 2 + this.label.width / 2);
+    this.icon.setX(total / 2 - this.icon.displayWidth / 2);
   }
 
   private setPressed(pressed: boolean): void {
     this.normal.setVisible(!pressed);
     this.pressed.setVisible(pressed);
-    this.label.setY(-6 + (pressed ? DEFAULTS.pressedSink * (this.height / 120) : 0));
+    const y = -6 + (pressed ? DEFAULTS.pressedSink * (this.height / 120) : 0);
+    this.label.setY(y);
+    this.icon?.setY(y);
   }
 }

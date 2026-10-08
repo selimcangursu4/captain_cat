@@ -9,12 +9,22 @@ import {
   townRegionTextures,
 } from '../../assets/AssetManifest';
 import { ensureTextures, releaseTextures } from '../../assets/loadAssets';
+import { FONT_FAMILY } from '../../config/theme';
 import type { RegionId, TownRegion } from '../../meta/town';
 import { tweenAsync } from '../tweens';
 
 type Point = { x: number; y: number };
 
 const FRAME = { pad: 18, slice: 40 } as const;
+/** Süren inşaatın üstündeki geri sayım çubuğu (sahne koordinatı). */
+const PILL = { width: 300, height: 70, bar: 14 } as const;
+
+interface ConstructionView {
+  readonly taskId: string;
+  readonly objects: Phaser.GameObjects.GameObject[];
+  readonly label: Phaser.GameObjects.Text;
+  readonly bar: Phaser.GameObjects.Graphics;
+}
 
 /**
  * Kasaba bölgesinin sahnesi (1000x820 tasarım alanı, ekrana ölçeklenir): arka plan,
@@ -27,6 +37,7 @@ export class RegionView {
   private readonly dust: Phaser.GameObjects.Particles.ParticleEmitter;
   private readonly sparks: Phaser.GameObjects.Particles.ParticleEmitter;
   private parts = new Map<string, Phaser.GameObjects.Image>();
+  private construction: ConstructionView | null = null;
   private region: RegionId | null = null;
   private origin: Point = { x: 0, y: 0 };
   private scale = 1;
@@ -36,6 +47,8 @@ export class RegionView {
     depth: number,
     /** Yapılmış bir parçaya dokunulunca (tasarımını değiştirmek için). */
     private readonly onPartTap?: (taskId: string) => void,
+    /** Süren inşaata dokunulunca (geri sayım, hızlandırma). */
+    private readonly onConstructionTap?: () => void,
   ) {
     this.frame = scene.add
       .nineslice(0, 0, TEXTURES.hudPanel, undefined, 100, 100, FRAME.slice, FRAME.slice, FRAME.slice, FRAME.slice)
@@ -76,6 +89,12 @@ export class RegionView {
     this.maskShape.clear().fillStyle(0xffffff).fillRoundedRect(x, y, width, height, 24);
   }
 
+  /** Harita gösterilirken bölge sahnesi gizlenir. */
+  setVisible(visible: boolean): void {
+    this.frame.setVisible(visible);
+    this.stage.setVisible(visible);
+  }
+
   get bounds(): { x: number; y: number; width: number; height: number } {
     return { ...this.origin, width: TOWN_STAGE.width * this.scale, height: TOWN_STAGE.height * this.scale };
   }
@@ -87,6 +106,7 @@ export class RegionView {
     for (const child of this.stage.list) this.scene.tweens.killTweensOf(child);
     this.stage.removeAll(true);
     this.parts.clear();
+    this.construction = null;
     this.region = region.id;
     if (previous && previous !== region.id) releaseTextures(this.scene, regionTextureKeys(previous));
 
@@ -125,6 +145,86 @@ export class RegionView {
     return image;
   }
 
+  /**
+   * Süren inşaat: parçanın soluk hali, iskele, sallanan çekiç ve geri sayım çubuğu. Bölge
+   * gösterildikten sonra çağrılır; inşaat bitince clearConstruction ile kaldırılır.
+   */
+  async showConstruction(taskId: string, design: number): Promise<void> {
+    if (this.construction?.taskId === taskId) return;
+    this.clearConstruction();
+    if (this.region === null || !taskId.startsWith(`${this.region}.`)) return;
+    await ensureTextures(this.scene, [townPartTexture(taskId, design)]);
+    const [x, y, w, h] = townPartBox(taskId);
+    const ghost = this.scene.add.image(x + w / 2, y + h / 2, townPartTexture(taskId, design)).setAlpha(0.38).setTint(0xd8c9b0);
+
+    // İskele: kutunun iki yanında direkler, aralıklı kalaslar ve çapraz destekler.
+    const scaffold = this.scene.add.graphics();
+    const poles = [x + 6, x + w - 6];
+    const floors = Math.max(2, Math.round(h / 90));
+    scaffold.lineStyle(6, 0x8b5a2b, 0.95);
+    for (const px of poles) scaffold.lineBetween(px, y + 6, px, y + h);
+    for (let i = 0; i <= floors; i++) {
+      const py = y + 10 + ((h - 14) * i) / floors;
+      scaffold.lineStyle(9, 0xc98a4b, 0.95).lineBetween(x - 4, py, x + w + 4, py);
+      scaffold.lineStyle(3, 0x4a2a0c, 0.8).lineBetween(x - 4, py + 5, x + w + 4, py + 5);
+      if (i < floors) {
+        const ny = y + 10 + ((h - 14) * (i + 1)) / floors;
+        scaffold.lineStyle(4, 0x8b5a2b, 0.7).lineBetween(poles[i % 2], py, poles[(i + 1) % 2], ny);
+      }
+    }
+
+    const hammer = this.scene.add.image(x + w * 0.72, y + h * 0.4, TEXTURES.hammer).setDisplaySize(84, 84);
+    this.scene.tweens.add({ targets: hammer, angle: { from: -30, to: 20 }, duration: 360, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+
+    const pillX = Phaser.Math.Clamp(x + w / 2, PILL.width / 2 + 10, TOWN_STAGE.width - PILL.width / 2 - 10);
+    const pillY = Math.max(PILL.height / 2 + 10, y - PILL.height / 2 - 6);
+    const pill = this.scene.add
+      .graphics()
+      .fillStyle(0x0d2f4a, 0.9)
+      .fillRoundedRect(pillX - PILL.width / 2, pillY - PILL.height / 2, PILL.width, PILL.height, PILL.height / 2)
+      .lineStyle(4, 0xffd23f)
+      .strokeRoundedRect(pillX - PILL.width / 2, pillY - PILL.height / 2, PILL.width, PILL.height, PILL.height / 2);
+    const bar = this.scene.add.graphics().setPosition(pillX, pillY);
+    const label = this.scene.add
+      .text(pillX, pillY - 8, '', { fontFamily: FONT_FAMILY, fontSize: '34px', fontStyle: '700', color: '#ffffff' })
+      .setOrigin(0.5);
+
+    const objects: Phaser.GameObjects.GameObject[] = [ghost, scaffold, hammer, pill, bar, label];
+    if (this.onConstructionTap) {
+      // Dokunma alanı: parça + üstündeki çubuk.
+      const top = Math.min(y, pillY - PILL.height / 2);
+      const bottom = y + h;
+      const hit = this.scene.add.zone(x + w / 2, (top + bottom) / 2, Math.max(w, PILL.width), bottom - top);
+      hit.setInteractive({ useHandCursor: true }).on('pointerup', () => this.onConstructionTap?.());
+      objects.push(hit);
+    }
+    this.stage.add(objects);
+    this.construction = { taskId, objects, label, bar };
+  }
+
+  /** Geri sayım yazısı ve ilerleme (0..1). */
+  updateConstruction(text: string, progress: number): void {
+    const c = this.construction;
+    if (!c) return;
+    if (c.label.text !== text) c.label.setText(text);
+    const inner = PILL.width - 50;
+    c.bar
+      .clear()
+      .fillStyle(0xffffff, 0.25)
+      .fillRoundedRect(-inner / 2, 14, inner, PILL.bar, PILL.bar / 2)
+      .fillStyle(0xffd23f, 1)
+      .fillRoundedRect(-inner / 2, 14, Math.max(PILL.bar, inner * Phaser.Math.Clamp(progress, 0, 1)), PILL.bar, PILL.bar / 2);
+  }
+
+  clearConstruction(): void {
+    if (!this.construction) return;
+    for (const obj of this.construction.objects) {
+      this.scene.tweens.killTweensOf(obj);
+      obj.destroy();
+    }
+    this.construction = null;
+  }
+
   /** Parçanın ekrandaki merkezi. */
   partPoint(taskId: string): Point {
     const [x, y, w, h] = townPartBox(taskId);
@@ -134,6 +234,7 @@ export class RegionView {
   /** Yeni yapılan parça: toz bulutu içinden zıplayarak belirir. */
   async build(taskId: string, design: number): Promise<void> {
     await ensureTextures(this.scene, [townPartTexture(taskId, design)]);
+    if (this.construction?.taskId === taskId) this.clearConstruction();
     const image = this.placePart(taskId, design).setScale(0.3).setAlpha(0);
     const p = this.partPoint(taskId);
     const [, , w, h] = townPartBox(taskId);

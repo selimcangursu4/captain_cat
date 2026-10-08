@@ -1,8 +1,10 @@
-import { ITEM_IDS, type ItemId } from '../config/economy';
+import { CHEST_IDS, ITEM_IDS, MATERIAL_IDS, SHIP_UPGRADE_IDS, type ChestId, type ItemId, type MaterialId, type ShipUpgradeId } from '../config/economy';
 import type { ObstacleKind } from '../core/obstacles';
+import { chestVariantSvg, clockSvg, hammerSvg, marketSvg, materialSvg, piggySvg, shipUpgradeSvg } from './svg/economy';
 import { gearSvg, heartSvg, itemSvg, plusBadgeSvg, roundButtonSvg, shopSvg } from './svg/items';
-import { DESIGN_THEMES, TOWN, partOf, type RegionId } from '../meta/town';
+import { DESIGN_THEMES, REGION_IDS, TOWN, partOf, type RegionId } from '../meta/town';
 import { REGION_ART, STAGE, THEME_PALETTES, backgroundSvg, partSvg } from './svg/town';
+import { regionIconSvg, townMapSvg } from './svg/town/map';
 import { SPECIAL_KINDS, TILE_COLORS, type SpecialKind, type TileColor } from '../core/types';
 import { cellSvg, selectionSvg } from './svg/board';
 import { captainPatiSvg } from './svg/characters';
@@ -80,7 +82,33 @@ export const TEXTURES = {
   roundButton: 'ui.roundButton',
   roundButtonActive: 'ui.roundButton.active',
   confetti: 'fx.confetti',
+  market: 'icon.market',
+  hammer: 'icon.hammer',
+  clock: 'icon.clock',
+  piggy: 'icon.piggy',
+  /** Liman haritasının zemini (tembel: yalnızca harita gösterilirken). */
+  townMap: 'town.map',
 } as const;
+
+/** Haritadaki bölge simgesi. */
+export function regionIconTexture(id: RegionId): string {
+  return `region.${id}`;
+}
+
+/** Kasaba malzemesi simgesi. */
+export function materialTexture(id: MaterialId): string {
+  return `material.${id}`;
+}
+
+/** Gemi atölyesi yükseltmesi simgesi. */
+export function shipUpgradeTexture(id: ShipUpgradeId): string {
+  return `ship.${id}`;
+}
+
+/** Pazar sandığı simgesi. */
+export function chestTexture(id: ChestId): string {
+  return `chest.${id}`;
+}
 
 /** Yardımcı / güçlendirici simgesi. */
 export function itemTexture(id: ItemId): string {
@@ -165,6 +193,15 @@ export const ASSET_MANIFEST: Readonly<Record<string, AssetEntry>> = {
   [TEXTURES.roundButton]: svg(128, 128, () => roundButtonSvg(128, false)),
   [TEXTURES.roundButtonActive]: svg(128, 128, () => roundButtonSvg(128, true)),
   ...Object.fromEntries(ITEM_IDS.map((id) => [itemTexture(id), svg(128, 128, () => itemSvg(id, 128))])),
+  ...Object.fromEntries(MATERIAL_IDS.map((id) => [materialTexture(id), svg(128, 128, () => materialSvg(id, 128))])),
+  ...Object.fromEntries(SHIP_UPGRADE_IDS.map((id) => [shipUpgradeTexture(id), svg(128, 128, () => shipUpgradeSvg(id, 128))])),
+  ...Object.fromEntries(CHEST_IDS.map((id) => [chestTexture(id), svg(160, 160, () => chestVariantSvg(id, 160))])),
+  [TEXTURES.market]: svg(128, 128, () => marketSvg(128)),
+  [TEXTURES.hammer]: svg(128, 128, () => hammerSvg(128)),
+  [TEXTURES.clock]: svg(128, 128, () => clockSvg(128)),
+  [TEXTURES.piggy]: svg(128, 128, () => piggySvg(128)),
+  ...Object.fromEntries(REGION_IDS.map((id) => [regionIconTexture(id), svg(160, 160, () => regionIconSvg(id, 160))])),
+  [TEXTURES.townMap]: { kind: 'svg', width: STAGE.width, height: STAGE.height, render: townMapSvg, lazy: true },
   ...townEntries(),
 };
 
