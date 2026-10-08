@@ -9,42 +9,36 @@ import { ECONOMY, ITEM_IDS, type ItemId } from '../config/economy';
  * Sürümler: 1 — bölüm, yıldız, altın, kasaba; 2 — can, envanter, günlük ödül, ayarlar;
  * 3 — açık seviye denemesi; ayarlar cihaza özgü olduğu için kayıttan çıktı (src/services/Settings.ts).
  */
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 5;
 
 export interface TownSave {
-  /** Şu an inşa edilen bölgenin sırası (0 = Deniz Feneri). */
   region: number;
-  /** Yapılmış görevler: görev kimliği → seçilen tasarım (0-2). */
   built: Record<string, number>;
-  /** Ödül sandığı alınmış bölgeler. */
   chests: string[];
 }
 
-/** Başlatılmış ama henüz bitmemiş seviye (can harcandı; kazanınca geri gelir). */
 export interface AttemptSave {
   level: number;
-  /** Başlama anı (ms). */
   startedAt: number;
-  /** Bu denemede satın alınan ek hamle (altın sınırı hesabında kullanılır). */
   extraMoves: number;
 }
 
 export interface SaveData {
   version: number;
-  /** Oynanacak sıradaki seviye (açılmış en yüksek seviye). */
   level: number;
   stars: number;
   coins: number;
+  materials: number;
   town: TownSave;
+  ship: Record<string, number>; // upgradeId -> level
   stats: { levelsWon: number; levelsLost: number };
-  /** nextAt: sıradaki canın geleceği an (ms, Date.now); can doluysa null. */
   lives: { count: number; nextAt: number | null };
   inventory: Record<ItemId, number>;
-  /** Açılış hediyesi verilmiş (kullanıma açılmış) eşyalar. */
   unlocked: ItemId[];
-  /** lastClaim: son alınan günün tarihi (YYYY-AA-GG, oyuncunun saat dilimi); streak: art arda alınan gün. */
+  cosmetics: string[];
   daily: { lastClaim: string | null; streak: number };
   attempt: AttemptSave | null;
+  piggyBank: { coins: number };
 }
 
 export function emptyInventory(): Record<ItemId, number> {
@@ -57,13 +51,17 @@ export function defaultSave(): SaveData {
     level: 1,
     stars: 0,
     coins: ECONOMY.startingCoins,
+    materials: ECONOMY.startingMaterial,
     town: { region: 0, built: {}, chests: [] },
+    ship: {},
     stats: { levelsWon: 0, levelsLost: 0 },
     lives: { count: ECONOMY.lives.max, nextAt: null },
     inventory: emptyInventory(),
     unlocked: [],
+    cosmetics: [],
     daily: { lastClaim: null, streak: 0 },
     attempt: null,
+    piggyBank: { coins: 0 },
   };
 }
 
@@ -72,7 +70,6 @@ export interface SaveStorage {
   write(value: string): void;
 }
 
-/** Tarayıcı / Android WebView localStorage. Erişilemezse (gizli mod vb.) sessizce bellekte kalır. */
 export class LocalStorageSaveStorage implements SaveStorage {
   constructor(private readonly key = 'kaptan-pati/save') {}
 
@@ -88,7 +85,6 @@ export class LocalStorageSaveStorage implements SaveStorage {
     try {
       globalThis.localStorage?.setItem(this.key, value);
     } catch {
-      // Kota dolu ya da depolama kapalı: oyun çalışmaya devam eder, kayıt bir sonraki yazımda denenir.
     }
   }
 }
@@ -107,11 +103,6 @@ const isInt = (v: unknown): v is number => typeof v === 'number' && Number.isInt
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
 
-/**
- * Okunan veriyi doğrular ve güncel sürüme taşır. Bozuk alanlar varsayılanla değiştirilir;
- * hiçbir durumda istisna fırlatmaz (bozuk kayıt oyunu açılmaz hale getirmemeli).
- * Eski sürümlerde olmayan alanlar varsayılanla dolar.
- */
 export function migrate(raw: unknown): SaveData {
   const base = defaultSave();
   if (typeof raw !== 'object' || raw === null) return base;
@@ -137,19 +128,29 @@ export function migrate(raw: unknown): SaveData {
   }
   const knownItem = (v: unknown): v is ItemId => (ITEM_IDS as readonly unknown[]).includes(v);
 
+  const ship: Record<string, number> = {};
+  if (isObject(d.ship)) {
+    for (const [key, value] of Object.entries(d.ship)) {
+      if (isInt(value)) ship[key] = value;
+    }
+  }
+
   const daily = isObject(d.daily) ? d.daily : {};
   const attempt = isObject(d.attempt) ? d.attempt : null;
+  const piggyBank = isObject(d.piggyBank) ? d.piggyBank : {};
 
   return {
     version: SAVE_VERSION,
     level: isInt(d.level) && d.level >= 1 ? d.level : base.level,
     stars: isInt(d.stars) && d.stars >= 0 ? d.stars : base.stars,
     coins: isInt(d.coins) && d.coins >= 0 ? d.coins : base.coins,
+    materials: isInt(d.materials) && d.materials >= 0 ? d.materials : (d.version as number < 4 ? base.materials : 0),
     town: {
       region: isInt(town.region) && town.region >= 0 ? town.region : 0,
       built,
       chests: Array.isArray(town.chests) ? town.chests.filter((c): c is string => typeof c === 'string') : [],
     },
+    ship,
     stats: {
       levelsWon: isInt(stats.levelsWon) ? stats.levelsWon : 0,
       levelsLost: isInt(stats.levelsLost) ? stats.levelsLost : 0,
@@ -157,6 +158,7 @@ export function migrate(raw: unknown): SaveData {
     lives: { count: livesCount, nextAt: livesCount >= ECONOMY.lives.max ? null : nextAt },
     inventory,
     unlocked: Array.isArray(d.unlocked) ? [...new Set(d.unlocked.filter(knownItem))] : [],
+    cosmetics: Array.isArray(d.cosmetics) ? [...new Set(d.cosmetics.filter((c) => typeof c === 'string'))] as string[] : [],
     daily: {
       lastClaim: typeof daily.lastClaim === 'string' && DATE_KEY.test(daily.lastClaim) ? daily.lastClaim : null,
       streak: isInt(daily.streak) && daily.streak >= 0 ? daily.streak : 0,
@@ -165,6 +167,9 @@ export function migrate(raw: unknown): SaveData {
       attempt && isInt(attempt.level) && attempt.level >= 1 && typeof attempt.startedAt === 'number'
         ? { level: attempt.level, startedAt: attempt.startedAt, extraMoves: isInt(attempt.extraMoves) ? attempt.extraMoves : 0 }
         : null,
+    piggyBank: {
+      coins: isInt(piggyBank.coins) && piggyBank.coins >= 0 ? piggyBank.coins : 0,
+    },
   };
 }
 

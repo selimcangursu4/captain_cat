@@ -5,18 +5,19 @@ import { HOME } from '../config/layout';
 import { FONT_FAMILY, UI_COLORS } from '../config/theme';
 import { t, type I18nKey } from '../i18n';
 import { dailyReward, levelProgress, lives, townProgress } from '../meta/progress';
-import { getTask, type TownRegion, type TownTask } from '../meta/town';
+import { type TownRegion, type TownTask } from '../meta/town';
 import { audio } from '../services/Audio';
 import { saveService } from '../services/SaveService';
-import { CAPTAIN_BUBBLE_HEIGHT, createCaptainBubble } from '../ui/components/CaptainBubble';
+import { createCaptainBubble } from '../ui/components/CaptainBubble';
 import { CounterPill, LivesPill, formatCountdown } from '../ui/components/CounterPill';
 import { IconButton } from '../ui/components/IconButton';
 import { TextButton } from '../ui/components/TextButton';
 import { flyIcons } from '../ui/effects/celebrate';
 import { OceanBackground } from '../ui/effects/OceanBackground';
-import { RegionView } from '../ui/home/RegionView';
-import { showDesignPicker, showRegionChest, showTaskList } from '../ui/home/townPopups';
-import { showDailyReward, showLevelChest, showLives, showSettings, showShop } from '../ui/popups/economyPopups';
+import { SagaMapView } from '../ui/home/SagaMapView';
+import { showDesignPicker, showRegionChest, showTaskList, showMissingMaterialBuy } from '../ui/home/townPopups';
+import { ECONOMY } from '../config/economy';
+import { showDailyReward, showLevelChest, showLives, showSettings, showShop, showLuckySpin } from '../ui/popups/economyPopups';
 import { LEVEL_REWARDS } from '../config/levels';
 import { levelReward, nextChestLevel } from '../meta/levelRewards';
 import { prepareLevelStart } from '../ui/popups/levelStart';
@@ -30,13 +31,9 @@ import { SCENES, fadeInScene, goToScene, type GameSceneData, type HomeSceneData 
 const DEPTH = { ui: 20, bubble: 60 } as const;
 const GIFT_BAR = { width: 380, height: 40 } as const;
 
-/**
- * Ana ekran (kasaba): can, yıldız ve altın; bölge görünümü, sıradaki görev, "Oyna" butonu,
- * mağaza ve ayarlar. Yıldızlarla görev yapılır, her görevde 3 tasarımdan biri seçilir.
- */
 export class HomeScene extends Phaser.Scene {
   private background!: OceanBackground;
-  private region!: RegionView;
+  private sagaMap!: SagaMapView;
   private lives!: LivesPill;
   private stars!: CounterPill;
   private coins!: CounterPill;
@@ -48,21 +45,17 @@ export class HomeScene extends Phaser.Scene {
   private tasksButton!: TextButton;
   private tasksBadge!: Phaser.GameObjects.Container;
   private playButton!: TextButton;
-  private arrows: TextButton[] = [];
   private devButtons: TextButton[] = [];
-  /** Görüntülenen bölge (geçmiş bölgelere bakılabilir). */
   private viewIndex = 0;
   private busy = false;
   private starsEarned = 0;
-  /** Sayaca uçmakta olan (henüz gösterilmeyen) yıldızlar. */
   private starsInFlight = 0;
-  /** Bölümden dönülürken açılacak seviye sandığı. */
   private chestLevel: number | null = null;
   private giftRow!: Phaser.GameObjects.Container;
   private giftFill!: Phaser.GameObjects.Graphics;
   private giftText!: Phaser.GameObjects.Text;
-  /** Altınlar sayaca uçarken gösterilen değer (null: kayıttaki gerçek değer). */
   private coinDisplay: number | null = null;
+  private spinButton!: IconButton;
 
   constructor() {
     super(SCENES.home);
@@ -74,17 +67,14 @@ export class HomeScene extends Phaser.Scene {
     this.starsInFlight = 0;
     this.coinDisplay = null;
     this.busy = false;
-    this.arrows = [];
     this.devButtons = [];
   }
 
   create(): void {
     fadeInScene(this);
     this.background = new OceanBackground(this);
-    this.region = new RegionView(this, DEPTH.ui, (taskId) => {
-      const task = getTask(taskId);
-      if (task && !this.busy) void this.changeDesign(task);
-    });
+    this.sagaMap = new SagaMapView(this, DEPTH.ui - 5, townProgress, (region) => { void this.openTasksForRegion(region); });
+    
     this.lives = new LivesPill(this, DEPTH.ui, () => void this.runPopup(() => showLives(this)));
     this.stars = new CounterPill(this, TEXTURES.star, DEPTH.ui);
     this.coins = new CounterPill(this, TEXTURES.coin, DEPTH.ui, { plus: true, onTap: () => void this.runPopup(() => showShop(this)) });
@@ -97,6 +87,12 @@ export class HomeScene extends Phaser.Scene {
       ...iconOptions,
       label: t('home.settings'),
     }).setDepth(DEPTH.ui);
+    this.spinButton = new IconButton(this, 0, 0, TEXTURES.star, () => void this.runPopup(() => showLuckySpin(this)), {
+      ...iconOptions,
+      label: 'Spin!',
+    }).setDepth(DEPTH.ui);
+    
+    // Yükseklik ve yerleşim hesaplamaları için map node'larından bağımsız, title vb ekran tepesinde kalacak.
     this.title = this.add
       .text(0, 0, '', {
         fontFamily: FONT_FAMILY,
@@ -132,11 +128,7 @@ export class HomeScene extends Phaser.Scene {
       fontSize: 60,
       variant: 'green',
     }).setDepth(DEPTH.ui);
-    this.arrows = [
-      new TextButton(this, 0, 0, '◀', () => void this.browse(-1), { width: 110, height: 110, fontSize: 48 }),
-      new TextButton(this, 0, 0, '▶', () => void this.browse(1), { width: 110, height: 110, fontSize: 48 }),
-    ];
-    for (const a of this.arrows) a.setDepth(DEPTH.ui + 1);
+    
     if (import.meta.env.DEV) this.createDevPanel();
 
     const stopListening = saveService.onChange(() => this.refreshCounters(true));
@@ -146,13 +138,10 @@ export class HomeScene extends Phaser.Scene {
     });
     this.scale.on(Phaser.Scale.Events.RESIZE, this.layout, this);
 
-    // Can zamanlayıcısı her saniye güncellenir (can dolunca sayaç da artar).
     this.time.addEvent({ delay: 1000, loop: true, callback: () => this.refreshLives() });
     audio.playMusic('home');
 
     this.viewIndex = townProgress.unlockedRegions.length - 1;
-    // Bölümde kazanılan yıldız ve seviye sandığının altını sayaçlara uçarak eklenecek;
-    // o zamana kadar eski değerler görünür.
     this.starsInFlight = this.starsEarned;
     if (this.chestLevel !== null) this.coinDisplay = saveService.data.coins - levelReward(this.chestLevel).coins;
     this.createGiftRow();
@@ -161,31 +150,22 @@ export class HomeScene extends Phaser.Scene {
     void this.showRegion().then(() => this.welcome());
   }
 
-  // ───────────────────────── yerleşim ─────────────────────────
-
   private layout(): void {
     const { width, height } = this.scale;
     const cx = width / 2;
     this.background.layout(width, height);
-    // Uzun ekranlarda fazladan boşluk sahnenin üstüne ve altına paylaştırılır.
     const extra = Math.max(0, height - HOME.referenceHeight);
     const top = HOME.topBarY + extra * 0.15;
-    // Sayaçların simgesi solda olduğu için grup hafifçe sola kaydırılır.
     const counters = cx - 20;
     this.lives.setPosition(counters - HOME.counterGap, top);
     this.stars.setPosition(counters, top);
     this.coins.setPosition(counters + HOME.counterGap, top);
+    
+    // Başlığı saklayalım veya harita adını yazalım (örn: Saga Map)
     this.title.setPosition(cx, top + HOME.titleGap);
     this.progressText.setPosition(cx, top + HOME.titleGap + 62);
 
-    const stageWidth = Math.min(HOME.stageMaxWidth, width - HOME.stageMargin * 2);
-    const stageTop = top + HOME.stageGap;
-    this.region.layout(cx - stageWidth / 2, stageTop, stageWidth);
-    const stage = this.region.bounds;
-    this.arrows[0].setPosition(stage.x + 70, stage.y + stage.height / 2);
-    this.arrows[1].setPosition(stage.x + stage.width - 70, stage.y + stage.height / 2);
-
-    const below = stage.y + stage.height;
+    const below = height - 600;
     const bottomSpace = height - below;
     this.taskCard.setPosition(cx, below + bottomSpace * 0.16);
     const tasksY = below + bottomSpace * 0.38;
@@ -193,6 +173,7 @@ export class HomeScene extends Phaser.Scene {
     this.tasksBadge.setPosition(cx + 190, tasksY - 48);
     this.shopButton.setPosition(cx - 350, tasksY - 16);
     this.settingsButton.setPosition(cx + 350, tasksY - 16);
+    this.spinButton.setPosition(cx - 350, tasksY - 180);
     this.playButton.setPosition(cx, below + bottomSpace * 0.64);
     this.giftRow.setPosition(cx, this.playButton.y + 128);
     this.devButtons.forEach((b, i) => b.setPosition(cx + (i - 0.5) * 340, height - 70));
@@ -208,13 +189,10 @@ export class HomeScene extends Phaser.Scene {
     return badge;
   }
 
-  // ───────────────────────── durum ─────────────────────────
-
   private get viewedRegion(): TownRegion {
     return townProgress.unlockedRegions[this.viewIndex];
   }
 
-  /** "Sıradaki hediye" çubuğu: sandık simgesi, 10 seviyelik ilerleme, hangi seviyede olduğu. */
   private createGiftRow(): void {
     const width = GIFT_BAR.width;
     const chest = this.add.image(-width / 2 - 50, 0, obstacleTexture('chest', 1)).setDisplaySize(84, 84);
@@ -244,7 +222,6 @@ export class HomeScene extends Phaser.Scene {
     this.giftRow.setVisible(level !== null);
     if (level === null) return;
     const target = nextChestLevel(level);
-    // Son sandıktan bu yana geçilen seviye (sandık seviyesini geçince dolar).
     const done = LEVEL_REWARDS.chestEvery - (target - level) - 1;
     const fraction = Math.max(0, done) / LEVEL_REWARDS.chestEvery;
     const width = GIFT_BAR.width;
@@ -264,18 +241,17 @@ export class HomeScene extends Phaser.Scene {
 
   private refreshCounters(animate: boolean): void {
     this.refreshLives();
-    this.stars.setValue(saveService.data.stars - this.starsInFlight, animate);
+    this.stars.setValue(saveService.data.materials - this.starsInFlight, animate); // Using materials for stars logic
     this.coins.setValue(this.coinDisplay ?? saveService.data.coins, animate);
     this.tasksBadge.setVisible(townProgress.canBuildNext());
     const level = levelProgress.currentLevel;
     this.playButton.setLabel(level ? `${t('home.play')} · ${t('home.level', { n: level })}` : t('home.allLevelsDone'));
     this.playButton.setEnabled(level !== null);
     this.refreshGiftRow();
+    this.sagaMap.refresh();
   }
 
   private async showRegion(): Promise<void> {
-    const region = this.viewedRegion;
-    await this.region.show(region, saveService.data.town.built);
     this.updateRegionLabels();
   }
 
@@ -286,13 +262,9 @@ export class HomeScene extends Phaser.Scene {
     this.progressText.setText(
       townProgress.townComplete ? t('home.townDone') : t('home.progress', { built, total }),
     );
-    const unlocked = townProgress.unlockedRegions.length;
-    this.arrows[0].setVisible(this.viewIndex > 0);
-    this.arrows[1].setVisible(this.viewIndex < unlocked - 1);
     void this.updateTaskCard();
   }
 
-  /** Sıradaki görev kartı: simge + ad + yıldız bedeli; dokununca doğrudan tasarım seçimi. */
   private async updateTaskCard(): Promise<void> {
     this.taskCard.removeAll(true);
     const region = this.viewedRegion;
@@ -316,9 +288,6 @@ export class HomeScene extends Phaser.Scene {
     this.taskCard.add([panel, image, name, star, cost, hit]);
   }
 
-  // ───────────────────────── eylemler ─────────────────────────
-
-  /** "Oyna": yeni eşya tanıtımı → (can yoksa can penceresi) → hedefler ve güçlendirici seçimi → bölüm. */
   private async play(): Promise<void> {
     const level = levelProgress.currentLevel;
     if (this.busy || level === null) return;
@@ -332,7 +301,6 @@ export class HomeScene extends Phaser.Scene {
     goToScene(this, SCENES.game, data);
   }
 
-  /** Bir pencereyi açar; açıkken ana ekranın diğer düğmeleri tepki vermez. */
   private async runPopup(open: () => Promise<unknown>): Promise<void> {
     if (this.busy) return;
     this.busy = true;
@@ -344,13 +312,11 @@ export class HomeScene extends Phaser.Scene {
     if (this.busy) return;
     this.busy = true;
     const choice = await showSettings(this);
-    // Dil değişince tüm metinler yeni dille yeniden çizilsin.
     if (choice === 'language') {
       this.scene.restart();
       return;
     }
     if (choice === 'logout') {
-      // Kaydedilmemiş ilerleme varken internetsiz çıkış yapılmaz (ilerleme kaybolmasın).
       if ((await logout()) === 'ok') {
         goToScene(this, SCENES.auth);
         return;
@@ -359,38 +325,34 @@ export class HomeScene extends Phaser.Scene {
     }
     this.busy = false;
   }
-
-  private async browse(delta: number): Promise<void> {
-    if (this.busy) return;
-    const next = Phaser.Math.Clamp(this.viewIndex + delta, 0, townProgress.unlockedRegions.length - 1);
-    if (next === this.viewIndex) return;
-    this.busy = true;
-    this.viewIndex = next;
-    await this.showRegion();
-    this.busy = false;
-  }
-
-  private async openTasks(): Promise<void> {
+  
+  private async openTasksForRegion(region: TownRegion): Promise<void> {
     if (this.busy) return;
     this.busy = true;
-    // Görevler her zaman inşa edilen bölgeye aittir; eski bir bölgeye bakılıyorsa oraya dön.
-    const current = townProgress.unlockedRegions.length - 1;
-    if (this.viewIndex !== current) {
-      this.viewIndex = current;
-      await this.showRegion();
-    }
-    const choice = await showTaskList(this, this.viewedRegion, townProgress);
+    const choice = await showTaskList(this, region, townProgress);
     this.busy = false;
     if (!choice) return;
     if (choice.action === 'build') await this.startBuild(choice.task);
     else await this.changeDesign(choice.task);
   }
 
+  private async openTasks(): Promise<void> {
+    this.openTasksForRegion(townProgress.currentRegion);
+  }
+
   private async startBuild(task: TownTask): Promise<void> {
     if (this.busy) return;
-    if (townProgress.stars < task.cost) {
-      await this.say(t('tasks.needStars'));
-      return;
+    if (townProgress.materials < task.cost) {
+      const missing = task.cost - townProgress.materials;
+      const costGold = missing * ECONOMY.missingMaterialGoldCost;
+      this.busy = true;
+      const bought = await showMissingMaterialBuy(this, missing, costGold, saveService.data.coins);
+      this.busy = false;
+      if (!bought) return;
+      
+      const cmd = dispatch({ type: 'buyMissingMaterial', missingAmount: missing });
+      if (!cmd.ok) return;
+      this.refreshCounters(true);
     }
     this.busy = true;
     const design = await showDesignPicker(this, task, 'build');
@@ -398,7 +360,6 @@ export class HomeScene extends Phaser.Scene {
       this.busy = false;
       return;
     }
-    // Bölge biterse sandık altını kayda hemen eklenir; sayaca sandık açıldıktan sonra uçarak gelsin.
     const coinsBefore = saveService.data.coins;
     this.coinDisplay = coinsBefore;
     const command = dispatch({ type: 'build', task: task.id, design });
@@ -409,13 +370,10 @@ export class HomeScene extends Phaser.Scene {
       return;
     }
     if (!result.regionCompleted) this.coinDisplay = null;
-    // Harcanan yıldızlar sayaçtan inşa edilen parçaya uçar.
-    await flyIcons(this, TEXTURES.star, this.stars.iconPoint, this.region.partPoint(task.id), {
-      count: Math.min(task.cost, 5),
-      size: 90,
-    });
+    
+    // Removed specific region coordinate flight animation since we don't have region view anymore
     audio.play('build');
-    await this.region.build(task.id, design);
+    this.sagaMap.refresh();
     this.updateRegionLabels();
     await this.say(t(`quip.task.${task.id}` as I18nKey));
 
@@ -434,14 +392,14 @@ export class HomeScene extends Phaser.Scene {
   private async changeDesign(task: TownTask): Promise<void> {
     this.busy = true;
     const design = await showDesignPicker(this, task, 'change', townProgress.designOf(task.id) ?? 0);
-    if (design !== null && dispatch({ type: 'changeDesign', task: task.id, design }).ok) await this.region.changeDesign(task.id, design);
+    if (design !== null && dispatch({ type: 'changeDesign', task: task.id, design }).ok) {
+       this.sagaMap.refresh();
+    }
     this.busy = false;
   }
 
-  /** Kaptan Pati'nin balonu (sahnenin altında, yeni parçayı örtmez): dokununca ya da birkaç saniye sonra kapanır. */
   private async say(text: string): Promise<void> {
-    const stage = this.region.bounds;
-    const y = stage.y + stage.height + 30 + CAPTAIN_BUBBLE_HEIGHT / 2;
+    const y = this.scale.height / 2;
     const bubble = createCaptainBubble(this, this.scale.width / 2, y, text, {
       depth: DEPTH.bubble,
       tapHint: true,
@@ -457,10 +415,6 @@ export class HomeScene extends Phaser.Scene {
     bubble.destroy();
   }
 
-  /**
-   * Ana ekrana gelince: bölümde kazanılan yıldız sayaca uçar, günün ilk girişinde günlük ödül
-   * açılır (altınlar sayaca akar), görev yapılabiliyorsa görev kartı dikkat çeker.
-   */
   private async welcome(): Promise<void> {
     if (this.busy) return;
     this.busy = true;
@@ -496,7 +450,6 @@ export class HomeScene extends Phaser.Scene {
     }
   }
 
-  /** Kazanılan altınlar ekranın ortasından sayaca uçar; sayaç her varışta biraz artar. */
   private async collectCoins(coinsBefore: number): Promise<void> {
     const gained = saveService.data.coins - coinsBefore;
     if (gained <= 0) {
@@ -519,8 +472,6 @@ export class HomeScene extends Phaser.Scene {
     this.coinDisplay = null;
     this.refreshCounters(false);
   }
-
-  // ───────────────────────── geliştirici paneli ─────────────────────────
 
   private createDevPanel(): void {
     const options = { width: 300, height: 80, fontSize: 32 };

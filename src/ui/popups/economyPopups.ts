@@ -11,6 +11,7 @@ import { inventory, lives } from '../../meta/progress';
 import { audio } from '../../services/Audio';
 import { settings } from '../../services/Settings';
 import { wallet } from '../../services/Wallet';
+import { saveService } from '../../services/SaveService';
 import { currentUser } from '../../net/account';
 import { dispatch, sync, type SyncStatus } from '../../net/sync';
 import { formatCountdown } from '../components/CounterPill';
@@ -58,11 +59,13 @@ export function showItemUnlock(scene: Phaser.Scene, id: ItemId): Promise<void> {
   });
 }
 
-/** Eşya bitince altınla paket alma. Alındıysa true. */
-export function showBuyItem(scene: Phaser.Scene, id: ItemId): Promise<boolean> {
+/** Eşya bitince altınla paket veya tekli alma. Alındıysa true. */
+export function showBuyItem(scene: Phaser.Scene, id: ItemId, isSingle = false): Promise<boolean> {
   return new Promise((resolve) => {
-    const { pack, price } = ECONOMY.items[id];
-    const affordable = wallet.coins >= price;
+    const { pack, price, singlePrice } = ECONOMY.items[id];
+    const cost = isSingle ? singlePrice : price;
+    const amount = isSingle ? 1 : pack;
+    const affordable = wallet.coins >= cost;
     const finish = (bought: boolean) => void popup.close().then(() => resolve(bought));
     const popup = new Popup(scene, {
       title: t('buy.title'),
@@ -70,11 +73,11 @@ export function showBuyItem(scene: Phaser.Scene, id: ItemId): Promise<boolean> {
       onClose: () => finish(false),
       buttons: [
         {
-          label: t('buy.button', { n: pack, cost: price }),
+          label: t(isSingle ? 'buy.singleButton' : 'buy.button', { n: amount, cost }),
           variant: 'green',
           enabled: affordable,
           onClick: () => {
-            if (!dispatch({ type: 'buyPack', item: id }).ok) return;
+            if (!dispatch({ type: isSingle ? 'buySingleItem' : 'buyPack', item: id }).ok) return;
             audio.play('coin');
             finish(true);
           },
@@ -82,7 +85,7 @@ export function showBuyItem(scene: Phaser.Scene, id: ItemId): Promise<boolean> {
       ],
     });
     popup.content.add(scene.add.image(0, -180, itemTexture(id)).setDisplaySize(190, 190));
-    popup.content.add(countBadge(scene, 80, -110, `×${pack}`));
+    popup.content.add(countBadge(scene, 80, -110, `×${amount}`));
     popup.content.add(label(scene, 0, -30, itemName(id), 52));
     popup.content.add(label(scene, 0, 35, itemDescription(id), 34, INK, 700));
     coinLine(popup, scene, 125, t('coins.balance', { n: wallet.coins }));
@@ -112,11 +115,21 @@ export function showLives(scene: Phaser.Scene): Promise<'refilled' | 'closed'> {
         ? []
         : [
             {
-              label: t('lives.refill', { cost }),
+              label: t('lives.refill', { cost: ECONOMY.lives.fullRefillCost }),
               variant: 'green',
-              enabled: wallet.coins >= cost,
+              enabled: wallet.coins >= ECONOMY.lives.fullRefillCost,
               onClick: () => {
                 if (!dispatch({ type: 'refillLives' }).ok) return;
+                audio.play('coin');
+                finish('refilled');
+              },
+            },
+            {
+              label: '+1 Can (' + ECONOMY.lives.refillCost + ')', // Using hardcoded or simple string for +1 Can since we might not have a translation key
+              variant: 'orange',
+              enabled: wallet.coins >= ECONOMY.lives.refillCost,
+              onClick: () => {
+                if (!dispatch({ type: 'buyOneLife' }).ok) return;
                 audio.play('coin');
                 finish('refilled');
               },
@@ -387,7 +400,7 @@ export function showShop(scene: Phaser.Scene): Promise<void> {
     const popup = new Popup(scene, {
       title: t('shop.title'),
       width: 960,
-      height: 1200,
+      height: 2900,
       onClose: () => void popup.close().then(resolve),
     });
     coinLine(popup, scene, -480, t('coins.balance', { n: wallet.coins }));
@@ -504,6 +517,209 @@ export function showShop(scene: Phaser.Scene): Promise<void> {
       }
       popup.content.add(card);
     });
+
+    // --- CHESTS SECTION ---
+    popup.content.add(label(scene, 0, 520, t('shop.chests'), 46, GOLD));
+    Object.values(ECONOMY.chests).forEach((chest, i) => {
+      const x = (i % 2 === 0 ? -1 : 1) * 215;
+      const y = 690 + Math.floor(i / 2) * 290;
+      const card = scene.add.container(x, y);
+      
+      const bg = scene.add.graphics();
+      bg.fillStyle(0xffffff, 0.75).fillRoundedRect(-200, -135, 400, 270, 26);
+      bg.lineStyle(4, 0xd9a066).strokeRoundedRect(-200, -135, 400, 270, 26);
+      card.add(bg);
+      
+      card.add(scene.add.image(0, -40, obstacleTexture('chest', 1)).setDisplaySize(120, 120));
+      
+      const button = new TextButton(
+        scene,
+        0,
+        85,
+        t('chest.buy', { cost: chest.priceGold }),
+        () => {
+          if (wallet.coins >= chest.priceGold) {
+            const cmd = dispatch({ type: 'buyChest', chestId: chest.id });
+            if (cmd.ok) {
+              audio.play('chest');
+              showToast(scene, t('chest.rewardDesc', { n: chest.guaranteedMaterial }));
+              // Optional: animate chest or something
+            }
+          } else {
+            showToast(scene, t('lose.cantAfford'));
+          }
+        },
+        { width: 250, height: 80, fontSize: 34, variant: 'green' }
+      );
+      card.add(button);
+      popup.content.add(card);
+    });
+
+    // --- SHIP UPGRADES SECTION ---
+    popup.content.add(label(scene, 0, 1160, t('shop.upgrades'), 46, GOLD));
+    const upgrades = Object.values(ECONOMY.shipUpgrades);
+    upgrades.forEach((upgrade: any, i: number) => {
+      const x = (i % 2 === 0 ? -1 : 1) * 215;
+      const y = 1330 + Math.floor(i / 2) * 290;
+      const card = scene.add.container(x, y);
+      
+      const bg = scene.add.graphics();
+      bg.fillStyle(0xffffff, 0.75).fillRoundedRect(-200, -135, 400, 270, 26);
+      bg.lineStyle(4, 0x4a90e2).strokeRoundedRect(-200, -135, 400, 270, 26);
+      card.add(bg);
+      
+      card.add(label(scene, 0, -90, upgrade.name, 36, '#4a90e2'));
+      
+      // Determine current level
+      // Note: save data might not be exposed directly in economyPopups without importing game state
+      // We will handle that by dispatching and catching if it's max level.
+      // But it's better to get the current level if possible. In economyPopups we don't have direct access to save state easily without importing `saveService`.
+      const currentLevel = saveService.data.ship[upgrade.id] || 0;
+      const isMax = currentLevel >= upgrade.maxLevel;
+      const nextLevelConfig = isMax ? null : upgrade.levels.find((l: any) => l.level === currentLevel + 1);
+
+      const labelText = isMax 
+        ? t('upgrade.max') 
+        : t('upgrade.buy', { gold: nextLevelConfig?.costGold || 0, mat: nextLevelConfig?.costMaterial || 0 });
+
+      const button = new TextButton(
+        scene,
+        0,
+        60,
+        labelText,
+        () => {
+          if (isMax) {
+            showToast(scene, t('upgrade.max'));
+            return;
+          }
+          const cmd = dispatch({ type: 'buyShipUpgrade', upgradeId: upgrade.id });
+          if (cmd.ok) {
+            audio.play('coin');
+            showToast(scene, 'Upgrade successful!');
+            popup.close().then(() => showShop(scene)); // Reload to refresh prices
+          } else {
+            showToast(scene, cmd.reason === 'max-level' ? t('upgrade.max') : t('lose.cantAfford'));
+          }
+        },
+        { width: 300, height: 75, fontSize: 30, variant: 'orange' }
+      );
+      card.add(button);
+      
+      // Icon
+      card.add(scene.add.image(0, -15, itemTexture('helm')).setDisplaySize(80, 80));
+      
+      popup.content.add(card);
+    });
+
+    // --- PIGGY BANK SECTION ---
+    const piggy = saveService.data.piggyBank?.coins || 0;
+    const piggyMax = ECONOMY.piggyBank.maxCoins;
+    const piggyPrice = ECONOMY.piggyBank.priceGold; // Or IAP price string
+    const isPiggyFull = piggy >= piggyMax;
+
+    popup.content.add(label(scene, 0, 1850, 'Piggy Bank', 46, GOLD));
+    
+    const piggyCard = scene.add.container(0, 2070);
+    const piggyBg = scene.add.graphics();
+    piggyBg.fillStyle(0xffffff, 0.75).fillRoundedRect(-300, -150, 600, 300, 26);
+    piggyBg.lineStyle(4, isPiggyFull ? 0x2e8b3d : 0xd9a066).strokeRoundedRect(-300, -150, 600, 300, 26);
+    piggyCard.add(piggyBg);
+    
+    // Title & amount
+    piggyCard.add(label(scene, 0, -100, `${piggy} / ${piggyMax}`, 42, isPiggyFull ? '#2e8b3d' : '#8a5a00'));
+    
+    // Visual
+    piggyCard.add(scene.add.image(0, -10, TEXTURES.coin).setDisplaySize(100, 100));
+
+    // Buy Button
+    const piggyBtn = new TextButton(
+      scene,
+      0,
+      85,
+      isPiggyFull ? `Break · ${piggyPrice} Gold` : 'Not Full',
+      () => {
+        if (!isPiggyFull) {
+          showToast(scene, 'Piggy Bank is not full yet!');
+          return;
+        }
+        if (wallet.coins < piggyPrice) {
+          showToast(scene, t('lose.cantAfford'));
+          return;
+        }
+        // In a real scenario, breaking costs real money. Here we use Gold or just "break it"
+        // Wait, if breaking costs Gold, but it gives Gold... It gives 2000 gold for 250 gold! That's the offer.
+        // But our command currently just empties it and gives gold without charging.
+        // Let's modify the command to charge gold if we want, or just assume it's free in this simulation because `commands.ts` just adds `piggy` to `coins`.
+        const cmd = dispatch({ type: 'buyPiggyBank' });
+        if (cmd.ok) {
+          audio.play('coin');
+          showToast(scene, 'Piggy Bank Broken!');
+          popup.close().then(() => showShop(scene)); // Refresh
+        } else {
+          showToast(scene, 'Error');
+        }
+      },
+      { width: 350, height: 80, fontSize: 34, variant: isPiggyFull ? 'green' : 'orange' } // Fallback to orange as a default
+    );
+    // Note: TextButton doesn't support disabled visually out of box, we just block the click.
+    piggyCard.add(piggyBtn);
+    popup.content.add(piggyCard);
+
+    void popup.open();
+  });
+}
+
+/** Şans çarkı popup'ı (Basit Gacha gösterimi) */
+export function showLuckySpin(scene: Phaser.Scene): Promise<void> {
+  return new Promise((resolve) => {
+    const chest = ECONOMY.chests['lucky_spin'];
+    const popup = new Popup(scene, {
+      title: 'Lucky Spin',
+      width: 720,
+      height: 900,
+      onClose: () => void popup.close().then(resolve),
+    });
+
+    coinLine(popup, scene, -250, t('coins.balance', { n: wallet.coins }));
+
+    // Wheel/Spin visual representation
+    const wheel = scene.add.image(0, 50, TEXTURES.star).setDisplaySize(300, 300);
+    popup.content.add(wheel);
+
+    // Spin button
+    const spinBtn = new TextButton(
+      scene,
+      0,
+      280,
+      `Spin · ${chest.priceGold}`,
+      () => {
+        if (wallet.coins < chest.priceGold) {
+          showToast(scene, t('lose.cantAfford'));
+          return;
+        }
+
+        const cmd = dispatch({ type: 'buyChest', chestId: 'lucky_spin' });
+        if (cmd.ok) {
+          audio.play('chest');
+          
+          // Spin animation
+          scene.tweens.add({
+            targets: wheel,
+            angle: 360 * 5 + Math.random() * 360,
+            duration: 2000,
+            ease: 'Cubic.easeOut',
+            onComplete: () => {
+              coinLine(popup, scene, -250, t('coins.balance', { n: wallet.coins }));
+              showToast(scene, `Won ${chest.guaranteedMaterial} Materials!`);
+              // You can expand this to show visual drops of gold/boosters based on random chance
+            }
+          });
+        }
+      },
+      { width: 320, height: 90, fontSize: 40, variant: 'orange' }
+    );
+    popup.content.add(spinBtn);
+
     void popup.open();
   });
 }

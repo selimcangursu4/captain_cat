@@ -40,7 +40,7 @@ export class Inventory {
   /** Altınla paket alır (ECONOMY.items[id].pack adet). Altın yetmezse false. */
   buyPack(id: ItemId): boolean {
     const { pack, price } = ECONOMY.items[id];
-    if (!this.wallet.trySpend(price)) return false;
+    if (!this.wallet.trySpendCoins(price)) return false;
     this.add({ [id]: pack });
     return true;
   }

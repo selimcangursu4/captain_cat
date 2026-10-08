@@ -53,12 +53,12 @@ describe('SavedWallet', () => {
     });
     const wallet = new SavedWallet(save);
     const seen: number[] = [];
-    const stop = wallet.onChange((c) => seen.push(c));
-    wallet.add(30);
-    expect(wallet.trySpend(100)).toBe(false);
-    expect(wallet.trySpend(80)).toBe(true);
+    const stop = wallet.onCoinsChange((c) => seen.push(c));
+    wallet.addCoins(30);
+    expect(wallet.trySpendCoins(100)).toBe(false);
+    expect(wallet.trySpendCoins(80)).toBe(true);
     stop();
-    wallet.add(5);
+    wallet.addCoins(5);
     expect(wallet.coins).toBe(5);
     expect(seen).toEqual([80, 0]);
     expect(new SaveService(storage).data.coins).toBe(5);

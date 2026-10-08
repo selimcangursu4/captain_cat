@@ -61,12 +61,19 @@ export class Lives {
     });
   }
 
-  /** Altınla canları doldurur. Altın yetmezse ya da canlar zaten doluysa false. */
+  /** Altınla canları doldurur (Full Refill). Altın yetmezse ya da canlar zaten doluysa false. */
   buyRefill(): boolean {
-    if (this.isFull || !this.wallet.trySpend(ECONOMY.lives.refillCost)) return false;
+    if (this.isFull || !this.wallet.trySpendCoins(ECONOMY.lives.fullRefillCost)) return false;
     this.save.update((d) => {
       d.lives = { count: this.max, nextAt: null };
     });
+    return true;
+  }
+
+  /** Tek bir can alır (Partial Refill). */
+  buyOneLife(): boolean {
+    if (this.isFull || !this.wallet.trySpendCoins(ECONOMY.lives.refillCost)) return false;
+    this.grant(1);
     return true;
   }
 

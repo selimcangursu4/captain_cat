@@ -66,7 +66,7 @@ export class DailyReward {
     this.save.update((d) => {
       d.daily = { lastClaim: today, streak };
     });
-    if (reward.coins) this.wallet.add(reward.coins);
+    if (reward.coins) this.wallet.addCoins(reward.coins);
     if (reward.items) this.inventory.add(reward.items);
     return reward;
   }

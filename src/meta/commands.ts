@@ -19,6 +19,12 @@ export type Command =
   | { readonly type: 'loseLevel'; readonly level: number; readonly at: number }
   | { readonly type: 'buyPack'; readonly item: ItemId; readonly at: number }
   | { readonly type: 'refillLives'; readonly at: number }
+  | { readonly type: 'buyOneLife'; readonly at: number }
+  | { readonly type: 'buySingleItem'; readonly item: ItemId; readonly at: number }
+  | { readonly type: 'buyMissingMaterial'; readonly missingAmount: number; readonly at: number }
+  | { readonly type: 'buyChest'; readonly chestId: string; readonly at: number }
+  | { readonly type: 'buyShipUpgrade'; readonly upgradeId: string; readonly at: number }
+  | { readonly type: 'buyPiggyBank'; readonly at: number }
   | { readonly type: 'claimDaily'; readonly tz: number; readonly at: number }
   | { readonly type: 'build'; readonly task: string; readonly design: number; readonly at: number }
   | { readonly type: 'changeDesign'; readonly task: string; readonly design: number; readonly at: number }
@@ -47,7 +53,7 @@ export const DEFAULT_MIN_LEVEL_MS = 3000;
 
 /** Bir seviyeyi kazanınca alınabilecek en fazla altın (bölüm altını + her hamle bonus + sandıklar). */
 export function maxWinCoins(moves: number, extraMoves: number, chests: number): number {
-  return ECONOMY.levelWinCoins + (moves + extraMoves) * ECONOMY.coinsPerBonusMove + chests * OBSTACLE_CONFIG.chestCoins;
+  return (ECONOMY.levelWinCoins + (moves + extraMoves) * ECONOMY.coinsPerBonusMove + chests * OBSTACLE_CONFIG.chestCoins) * 2;
 }
 
 const fail = (reason: string): CommandResult => ({ ok: false, reason });
@@ -94,7 +100,7 @@ function run(game: GameServices, cmd: Command, rules: CommandRules): CommandResu
 
     case 'buyExtraMoves': {
       if (!data.attempt) return fail('no-attempt');
-      if (!wallet.trySpend(ECONOMY.extraMoves.cost)) return fail('coins');
+      if (!wallet.trySpendCoins(ECONOMY.extraMoves.cost)) return fail('coins');
       save.update((d) => {
         if (d.attempt) d.attempt.extraMoves += ECONOMY.extraMoves.count;
       });
@@ -135,8 +141,79 @@ function run(game: GameServices, cmd: Command, rules: CommandRules): CommandResu
       return inventory.buyPack(cmd.item) ? ok() : fail('coins');
     }
 
+    case 'buySingleItem': {
+      if (!inventory.isUnlocked(cmd.item)) return fail('item-locked');
+      const itemConfig = ECONOMY.items[cmd.item];
+      if (!wallet.trySpendCoins(itemConfig.singlePrice)) return fail('coins');
+      save.update((d) => {
+        d.inventory[cmd.item] = (d.inventory[cmd.item] || 0) + 1;
+      });
+      return ok();
+    }
+
+    case 'buyMissingMaterial': {
+      const cost = cmd.missingAmount * ECONOMY.missingMaterialGoldCost;
+      if (!wallet.trySpendCoins(cost)) return fail('coins');
+      save.update((d) => {
+        d.materials += cmd.missingAmount;
+      });
+      return ok();
+    }
+
+    case 'buyChest': {
+      const chestConfig = Object.values(ECONOMY.chests).find(c => c.id === cmd.chestId);
+      if (!chestConfig) return fail('chest-unknown');
+      if (!wallet.trySpendCoins(chestConfig.priceGold)) return fail('coins');
+      
+      save.update((d) => {
+        d.materials += chestConfig.guaranteedMaterial;
+        // Opsiyonel: Sandık içinden çıkan rastgele eşyaları (booster vs.) da burada d'ye ekleyebiliriz.
+      });
+      return ok();
+    }
+
+    case 'buyShipUpgrade': {
+      // TypeScript type assertion required for shipUpgrades as it's an object with known keys
+      const config = (ECONOMY.shipUpgrades as Record<string, any>)[cmd.upgradeId];
+      if (!config) return fail('upgrade-unknown');
+      const currentLevel = data.ship[cmd.upgradeId] || 0;
+      if (currentLevel >= config.maxLevel) return fail('max-level');
+      
+      const nextLevelConfig = config.levels.find((l: any) => l.level === currentLevel + 1);
+      if (!nextLevelConfig) return fail('level-config-missing');
+      
+      if (data.materials < nextLevelConfig.costMaterial) return fail('materials');
+      if (nextLevelConfig.costGold > 0 && data.coins < nextLevelConfig.costGold) return fail('coins');
+      
+      if (nextLevelConfig.costGold > 0) {
+        if (!wallet.trySpendCoins(nextLevelConfig.costGold)) return fail('coins');
+      }
+      
+      save.update((d) => {
+        d.materials -= nextLevelConfig.costMaterial;
+        d.ship[cmd.upgradeId] = currentLevel + 1;
+      });
+      return ok();
+    }
+
+    case 'buyPiggyBank': {
+      const piggy = data.piggyBank?.coins || 0;
+      if (piggy < ECONOMY.piggyBank.maxCoins) return fail('piggy-not-full');
+      if (data.coins < ECONOMY.piggyBank.priceGold) return fail('coins');
+
+      save.update((d) => {
+        d.coins -= ECONOMY.piggyBank.priceGold;
+        d.coins += piggy;
+        if (d.piggyBank) d.piggyBank.coins = 0;
+      });
+      return ok();
+    }
+
     case 'refillLives':
       return lives.buyRefill() ? ok() : fail('refill');
+      
+    case 'buyOneLife':
+      return lives.buyOneLife() ? ok() : fail('refill');
 
     case 'claimDaily': {
       const reward = daily.claim();
@@ -199,6 +276,7 @@ export function parseCommand(raw: unknown): Command | null {
         : null;
     case 'buyExtraMoves':
     case 'refillLives':
+    case 'buyOneLife':
     case 'devReset':
       return { type: c.type, at };
     case 'useItem':
@@ -207,6 +285,16 @@ export function parseCommand(raw: unknown): Command | null {
       return isInt(c.level, 1, 100_000) && isInt(c.coins, 0, 1_000_000) ? { type: 'winLevel', level: c.level, coins: c.coins, at } : null;
     case 'buyPack':
       return oneOf(ITEM_IDS, c.item) ? { type: 'buyPack', item: c.item, at } : null;
+    case 'buySingleItem':
+      return oneOf(ITEM_IDS, c.item) ? { type: 'buySingleItem', item: c.item, at } : null;
+    case 'buyMissingMaterial':
+      return isInt(c.missingAmount, 1, 1000) ? { type: 'buyMissingMaterial', missingAmount: c.missingAmount, at } : null;
+    case 'buyChest':
+      return typeof c.chestId === 'string' ? { type: 'buyChest', chestId: c.chestId, at } : null;
+    case 'buyShipUpgrade':
+      return typeof c.upgradeId === 'string' ? { type: 'buyShipUpgrade', upgradeId: c.upgradeId, at } : null;
+    case 'buyPiggyBank':
+      return { type: 'buyPiggyBank', at };
     case 'claimDaily':
       // Gerçek saat dilimleri -14 ile +12 saat arasıdır.
       return isInt(c.tz, -840, 720) ? { type: 'claimDaily', tz: c.tz, at } : null;

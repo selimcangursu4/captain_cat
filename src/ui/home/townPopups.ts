@@ -39,7 +39,7 @@ export async function showTaskList(scene: Phaser.Scene, region: TownRegion, town
   const icons = region.tasks.map((task) => townPartTexture(task.id, town.designOf(task.id) ?? 0));
   await ensureTextures(scene, icons);
   const next = town.nextTask(region);
-  const needStars = next !== null && town.stars < next.cost;
+  const needStars = next !== null && town.materials < next.cost;
   const rowHeight = 112;
   const height = 150 + region.tasks.length * rowHeight + (needStars ? 80 : 0);
 
@@ -80,7 +80,7 @@ export async function showTaskList(scene: Phaser.Scene, region: TownRegion, town
           fontSize: 32,
           variant: 'green',
         });
-        build.setEnabled(town.stars >= task.cost);
+        build.setEnabled(town.materials >= task.cost);
         popup.content.add(build);
       } else {
         popup.content.add(starCost(scene, 150, y, task.cost, true));
@@ -177,5 +177,30 @@ export function showRegionChest(scene: Phaser.Scene, region: TownRegion, coins: 
       ]);
       await waitMs(scene, 100);
     });
+  });
+}
+
+export function showMissingMaterialBuy(scene: Phaser.Scene, missingCount: number, costGold: number, currentGold: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const affordable = currentGold >= costGold;
+    const popup = new Popup(scene, {
+      title: t('tasks.buyMissing'),
+      height: 600,
+      buttons: [
+        { label: t('lose.giveUp'), onClick: () => void popup.close().then(() => resolve(false)) },
+        { 
+          label: t('tasks.buyAndBuild', { cost: costGold }),
+          variant: 'green',
+          enabled: affordable,
+          onClick: () => void popup.close().then(() => resolve(true))
+        }
+      ]
+    });
+    popup.content.add(text(scene, 0, -60, t('tasks.missingAmount', { n: missingCount }), 42));
+    const coin = scene.add.image(-40, 20, TEXTURES.coin).setDisplaySize(64, 64);
+    const bal = text(scene, 30, 20, String(currentGold), 52, INK).setOrigin(0, 0.5);
+    popup.content.add([coin, bal]);
+    if (!affordable) popup.content.add(text(scene, 0, 100, t('lose.cantAfford'), 38, '#c0392b'));
+    void popup.open();
   });
 }

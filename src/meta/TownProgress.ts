@@ -17,8 +17,8 @@ export type BuildResult =
 export class TownProgress {
   constructor(private readonly save: SaveService) {}
 
-  get stars(): number {
-    return this.save.data.stars;
+  get materials(): number {
+    return this.save.data.materials;
   }
 
   /** Şu an inşa edilen bölge (tüm kasaba bittiyse son bölge). */
@@ -52,10 +52,10 @@ export class TownProgress {
     return region.tasks.find((t) => !this.isBuilt(t.id)) ?? null;
   }
 
-  /** Sıradaki görevi yapmaya yetecek yıldız var mı? (Ana ekrandaki "!" rozeti.) */
+  /** Sıradaki görevi yapmaya yetecek malzeme var mı? (Ana ekrandaki "!" rozeti.) */
   canBuildNext(): boolean {
     const task = this.nextTask();
-    return task !== null && this.stars >= task.cost;
+    return task !== null && this.materials >= task.cost;
   }
 
   build(taskId: string, design: number): BuildResult {
@@ -63,13 +63,13 @@ export class TownProgress {
     if (!task || !DESIGN_THEMES[design]) return { ok: false, reason: 'unknown' };
     if (this.isBuilt(taskId)) return { ok: false, reason: 'built' };
     if (task.region !== this.currentRegion.id || this.nextTask()?.id !== taskId) return { ok: false, reason: 'locked' };
-    if (this.stars < task.cost) return { ok: false, reason: 'stars' };
+    if (this.materials < task.cost) return { ok: false, reason: 'stars' };
 
     const region = this.currentRegion;
     const index = TOWN.indexOf(region);
     const completes = region.tasks.every((t) => t.id === taskId || this.isBuilt(t.id));
     this.save.update((d) => {
-      d.stars -= task.cost;
+      d.materials -= task.cost;
       d.town.built[taskId] = design;
       if (completes) {
         d.town.chests.push(region.id);
