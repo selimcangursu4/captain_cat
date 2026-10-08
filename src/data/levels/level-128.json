@@ -1,0 +1,31 @@
+{
+  "id": 128,
+  "moves": 32,
+  "colors": ["fish", "anchor", "shell", "ring", "star"],
+  "board": [
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    ".xxxxxxx.",
+    ".xxxxxxx.",
+    ".xxxxxxx.",
+    "xxxxxxxxx",
+    "xxxxxxxxx"
+  ],
+  "block": [
+    ".........",
+    ".........",
+    ".........",
+    ".........",
+    ".........",
+    ".........",
+    ".23...32.",
+    "....2....",
+    ".1.333.1."
+  ],
+  "goals": [
+    {"type": "obstacle", "kind": "sandbag"},
+    {"type": "color", "color": "star", "count": 35}
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "id": 92,
+  "moves": 16,
+  "colors": ["anchor", "shell", "ring", "star"],
+  "board": [
+    "xxxxxxxx",
+    "xxxxxxxx",
+    ".xxxxxx.",
+    "..xxxx..",
+    "..xxxx..",
+    ".xxxxxx.",
+    "xxxxxxxx",
+    "xxxxxxxx"
+  ],
+  "block": [
+    "........",
+    "........",
+    "........",
+    "........",
+    "..2..2..",
+    ".c....c.",
+    "..2..2..",
+    "........"
+  ],
+  "goals": [{"type": "obstacle", "kind": "chest"}]
+}

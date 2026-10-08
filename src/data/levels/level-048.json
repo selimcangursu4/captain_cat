@@ -1,0 +1,42 @@
+{
+  "id": 48,
+  "moves": 32,
+  "colors": ["fish", "anchor", "shell", "ring", "star"],
+  "board": [
+    "xx.xxx.xx",
+    "xx.xxx.xx",
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    "xx.xxx.xx",
+    "xx.xxx.xx"
+  ],
+  "floor": [
+    ".........",
+    ".........",
+    "....1....",
+    "...121...",
+    "..12221..",
+    "...121...",
+    "....1....",
+    ".........",
+    "........."
+  ],
+  "block": [
+    ".........",
+    ".........",
+    ".........",
+    ".........",
+    ".........",
+    ".........",
+    "2.......2",
+    "2...1...2",
+    "1.......1"
+  ],
+  "goals": [
+    {"type": "obstacle", "kind": "moss"},
+    {"type": "obstacle", "kind": "sandbag"}
+  ]
+}

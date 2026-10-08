@@ -1,0 +1,39 @@
+{
+  "id": 112,
+  "moves": 21,
+  "colors": ["fish", "anchor", "shell", "ring", "star"],
+  "board": [
+    "xxxxxxxx",
+    "xxxxxxxx",
+    "xxxxxxxx",
+    "xxx..xxx",
+    "xxx..xxx",
+    "xxxxxxxx",
+    "xxxxxxxx",
+    "xxxxxxxx"
+  ],
+  "floor": [
+    ".1....1.",
+    ".1....1.",
+    ".1....1.",
+    ".1....1.",
+    ".1....1.",
+    ".1....1.",
+    ".1....1.",
+    ".1....1."
+  ],
+  "block": [
+    "........",
+    "........",
+    "........",
+    "........",
+    "..b..b..",
+    "........",
+    "........",
+    "........"
+  ],
+  "goals": [
+    {"type": "seagull", "count": 7},
+    {"type": "obstacle", "kind": "moss"}
+  ]
+}

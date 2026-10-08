@@ -1,0 +1,26 @@
+{
+  "id": 1,
+  "moves": 14,
+  "colors": ["fish", "anchor", "shell", "star"],
+  "board": [
+    "xxxxxxx",
+    "xxxxxxx",
+    "xxxxxxx",
+    "xxxxxxx",
+    "xxxxxxx",
+    "xxxxxxx",
+    "xxxxxxx"
+  ],
+  "tiles": [
+    ".......",
+    ".......",
+    "...F...",
+    "SFFAT..",
+    ".......",
+    ".......",
+    "......."
+  ],
+  "goals": [{"type": "color", "color": "fish", "count": 30}],
+  "tutorial": [{"text": "tut.match", "swap": [[2, 3], [3, 3]]}, {"text": "tut.goals"}],
+  "seed": 1
+}

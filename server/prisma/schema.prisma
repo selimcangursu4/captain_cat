@@ -1,0 +1,75 @@
+// Kaptan Pati veritabanı şeması (PostgreSQL). Değiştirince: npm run db:migrate -- --name <açıklama>
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Oyuncu hesabı. E-posta küçük harfe çevrilerek saklanır.
+model User {
+  id           String      @id @default(uuid()) @db.Uuid
+  email        String      @unique
+  displayName  String
+  /// scrypt özeti: "scrypt$N$r$p$tuz$özet" (şifrenin kendisi asla saklanmaz)
+  passwordHash String
+  createdAt    DateTime    @default(now())
+  lastLoginAt  DateTime?
+  sessions     Session[]
+  save         GameSave?
+  events       GameEvent[]
+}
+
+/// Oturum: istemcideki belirtecin SHA-256 özeti (belirtecin kendisi saklanmaz).
+model Session {
+  id         String   @id @default(uuid()) @db.Uuid
+  tokenHash  String   @unique
+  userId     String   @db.Uuid
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+  expiresAt  DateTime
+  userAgent  String?
+
+  @@index([userId])
+}
+
+/// Oyuncunun esas kaydı (src/services/SaveService.ts SaveData). revision her değişiklikte artar.
+/// level/stars/coins sorgular (sıralama, istatistik) için ayrıca tutulur.
+model GameSave {
+  userId    String   @id @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  data      Json
+  revision  Int      @default(0)
+  level     Int      @default(1)
+  stars     Int      @default(0)
+  coins     Int      @default(0)
+  updatedAt DateTime @updatedAt
+}
+
+/// Sunucuya gelen her komut (kabul edilen ve reddedilen): hile incelemesi ve istatistik için.
+model GameEvent {
+  id        BigInt   @id @default(autoincrement())
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  payload   Json
+  clientAt  DateTime
+  accepted  Boolean
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+/// Seviyeler: uygulama güncellemeden yeni seviye eklemek için (npm run db:seed dosyalardan aktarır).
+model Level {
+  id        Int      @id
+  data      Json
+  published Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

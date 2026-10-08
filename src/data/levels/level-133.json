@@ -1,0 +1,30 @@
+{
+  "id": 133,
+  "moves": 30,
+  "colors": ["fish", "anchor", "shell", "ring", "star"],
+  "board": [
+    "..xxxx..",
+    ".xxxxxx.",
+    "xxx..xxx",
+    "xxx..xxx",
+    "xxx..xxx",
+    "xxxxxxxx",
+    "xxxxxxxx",
+    "xxxxxxxx"
+  ],
+  "block": [
+    "........",
+    "........",
+    "..1..1..",
+    "........",
+    "........",
+    "...11...",
+    "........",
+    "........"
+  ],
+  "goals": [
+    {"type": "color", "color": "star", "count": 32},
+    {"type": "color", "color": "anchor", "count": 33},
+    {"type": "color", "color": "ring", "count": 35}
+  ]
+}

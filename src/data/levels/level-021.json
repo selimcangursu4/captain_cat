@@ -1,0 +1,28 @@
+{
+  "id": 21,
+  "moves": 19,
+  "colors": ["fish", "anchor", "shell", "ring", "star"],
+  "board": [
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    "xxxxxxxxx"
+  ],
+  "floor": [
+    ".........",
+    ".........",
+    "..22222..",
+    "..22222..",
+    "..22222..",
+    "..22222..",
+    "..22222..",
+    ".........",
+    "........."
+  ],
+  "goals": [{"type": "obstacle", "kind": "moss"}]
+}

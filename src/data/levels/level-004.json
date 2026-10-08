@@ -1,0 +1,21 @@
+{
+  "id": 4,
+  "moves": 14,
+  "colors": ["fish", "anchor", "shell", "star"],
+  "tiles": [
+    "........",
+    "........",
+    "...AF...",
+    "..FTTA..",
+    "..ATFS..",
+    "...ST...",
+    "........",
+    "........"
+  ],
+  "goals": [{"type": "color", "color": "star", "count": 30}],
+  "tutorial": [
+    {"text": "tut.seagull.make", "swap": [[5, 4], [4, 4]], "expect": {"creates": "seagull"}},
+    {"text": "tut.seagull.use", "tap": "seagull"}
+  ],
+  "seed": 1
+}

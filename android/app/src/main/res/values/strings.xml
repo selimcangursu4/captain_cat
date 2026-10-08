@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Kaptan Pati</string>
+    <string name="title_activity_main">Kaptan Pati</string>
+    <string name="package_name">com.kaptanpati.game</string>
+    <string name="custom_url_scheme">com.kaptanpati.game</string>
+</resources>

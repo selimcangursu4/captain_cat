@@ -1,0 +1,22 @@
+{
+  "id": 6,
+  "moves": 16,
+  "colors": ["fish", "anchor", "shell", "star"],
+  "tiles": [
+    "........",
+    "........",
+    "........",
+    "........",
+    "...FT...",
+    "........",
+    "........",
+    "........"
+  ],
+  "specials": [{"at": [4, 3], "kind": "harpoon-h"}, {"at": [4, 4], "kind": "cannon"}],
+  "goals": [
+    {"type": "color", "color": "anchor", "count": 35},
+    {"type": "color", "color": "shell", "count": 35}
+  ],
+  "tutorial": [{"text": "tut.combo", "swapSpecials": true}],
+  "seed": 1
+}

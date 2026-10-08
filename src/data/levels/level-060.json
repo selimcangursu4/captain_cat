@@ -1,0 +1,31 @@
+{
+  "id": 60,
+  "moves": 16,
+  "colors": ["fish", "anchor", "shell", "ring", "star"],
+  "board": [
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    "xxxxxxxxx",
+    "xxxxxxxxx"
+  ],
+  "block": [
+    ".........",
+    ".........",
+    ".........",
+    ".........",
+    ".........",
+    ".........",
+    ".........",
+    "...b.b...",
+    "........."
+  ],
+  "goals": [
+    {"type": "seagull", "count": 7},
+    {"type": "color", "color": "anchor", "count": 30}
+  ]
+}

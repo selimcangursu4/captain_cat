@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+.vite/
+# Sunucu sırları (örnek: .env.example)
+.env
+# Prisma'nın ürettiği istemci (npm run db:generate)
+server/generated/

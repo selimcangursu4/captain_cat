@@ -1,0 +1,23 @@
+# Yerel geliştirme veritabanı: `npm run db:up` (Docker Desktop açık olmalı).
+# Veriler "kaptan-pati-db" biriminde kalır; silmek için: docker compose down -v
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: kaptan-pati-db
+    environment:
+      POSTGRES_USER: kaptan
+      POSTGRES_PASSWORD: kaptan_dev_password
+      POSTGRES_DB: kaptan_pati
+    ports:
+      # Bilgisayarda başka bir PostgreSQL varsa çakışmasın diye 5433.
+      - "5433:5432"
+    volumes:
+      - kaptan-pati-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kaptan -d kaptan_pati"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  kaptan-pati-db:

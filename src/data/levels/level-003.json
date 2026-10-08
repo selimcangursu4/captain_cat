@@ -1,0 +1,21 @@
+{
+  "id": 3,
+  "moves": 13,
+  "colors": ["fish", "anchor", "shell", "star"],
+  "tiles": [
+    "........",
+    "..T.....",
+    "..S.....",
+    "..S.....",
+    "..FSSA..",
+    "..S.....",
+    "........",
+    "........"
+  ],
+  "goals": [{"type": "color", "color": "shell", "count": 35}],
+  "tutorial": [
+    {"text": "tut.cannon.make", "swap": [[5, 2], [4, 2]], "expect": {"creates": "cannon"}},
+    {"text": "tut.cannon.use", "tap": "cannon"}
+  ],
+  "seed": 1
+}

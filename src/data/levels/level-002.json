@@ -1,0 +1,29 @@
+{
+  "id": 2,
+  "moves": 16,
+  "colors": ["fish", "anchor", "shell", "star"],
+  "board": [
+    "xxxxxxx",
+    "xxxxxxx",
+    "xxxxxxx",
+    "xxxxxxx",
+    "xxxxxxx",
+    "xxxxxxx",
+    "xxxxxxx"
+  ],
+  "tiles": [
+    ".......",
+    ".......",
+    "..A....",
+    "AASAF..",
+    ".......",
+    ".......",
+    "......."
+  ],
+  "goals": [{"type": "color", "color": "anchor", "count": 28}],
+  "tutorial": [
+    {"text": "tut.harpoon.make", "swap": [[2, 2], [3, 2]], "expect": {"creates": "harpoon-v"}},
+    {"text": "tut.harpoon.use", "tap": "harpoon-v"}
+  ],
+  "seed": 1
+}

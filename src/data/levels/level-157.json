@@ -1,0 +1,19 @@
+{
+  "id": 157,
+  "moves": 29,
+  "colors": ["fish", "anchor", "shell", "ring", "star"],
+  "block": [
+    "........",
+    "c......c",
+    ".2....2.",
+    "2.2..2.2",
+    "........",
+    "........",
+    "........",
+    "c......c"
+  ],
+  "goals": [
+    {"type": "obstacle", "kind": "chest"},
+    {"type": "obstacle", "kind": "sandbag"}
+  ]
+}

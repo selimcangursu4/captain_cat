@@ -1,0 +1,19 @@
+{
+  "id": 77,
+  "moves": 19,
+  "colors": ["fish", "anchor", "shell", "ring", "star"],
+  "cover": [
+    "........",
+    "........",
+    "n......n",
+    "..n..n..",
+    "..n..n..",
+    ".n....n.",
+    ".n....n.",
+    "........"
+  ],
+  "goals": [
+    {"type": "obstacle", "kind": "net"},
+    {"type": "color", "color": "ring", "count": 28}
+  ]
+}
