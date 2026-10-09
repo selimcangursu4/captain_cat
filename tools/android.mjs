@@ -51,7 +51,8 @@ function gradle(task, env = {}) {
   const wrapper = join(root, 'android', windows ? 'gradlew.bat' : 'gradlew');
   run(windows ? `"${wrapper}"` : wrapper, [task, '--console=plain'], {
     cwd: join(root, 'android'),
-    env: { ...process.env, JAVA_HOME: javaHome, ...env },
+    // JAVA_HOME en son: çağıranın ortamı (içinde eski JAVA_HOME olabilir) Java 21 seçimini ezmesin.
+    env: { ...process.env, ...env, JAVA_HOME: javaHome },
   });
 }
 
