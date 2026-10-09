@@ -30,8 +30,11 @@ Kod tarafındaki zorunluluklar (aşağıda "Kodda hazır") tamamlandı.
 
 İnceleme sırasında oyun sunucuya bağlanabilmeli; aksi halde "uygulama çalışmıyor" (2.1) reddi gelir.
 
-1. Bir alan adı ve HTTPS'li barındırma seç (Render, Railway, Fly.io ya da VPS + Caddy/Nginx). Sunucu `Dockerfile` ile çalışır.
-2. Yönetilen bir PostgreSQL oluştur.
+1. **Render (hazır):** [tek tıkla kurulum](https://render.com/deploy?repo=https://github.com/selimcangursu4/captain_cat) →
+   `render.yaml` sunucuyu (Docker) ve PostgreSQL'i Frankfurt'ta birlikte kurar; adres `https://kaptan-pati-server.onrender.com` gibi olur.
+   İncelemeden önce web servisini **Starter**, veritabanını **Basic** plana geçir (ücretsiz plan uyur ve 30 günde silinir).
+   Başka bir barındırma (Railway, Fly.io, VPS) da olur: sunucu `Dockerfile` ile çalışır.
+2. Render dışında kuruyorsan yönetilen bir PostgreSQL oluştur.
 3. Sunucu ortam değişkenleri (`.env.example`):
    - `DATABASE_URL` = yayın veritabanı
    - `DEV_COMMANDS=0` (**mutlaka**; açık kalırsa hile komutları ve doğrulamasız alım açılır)

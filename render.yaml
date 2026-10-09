@@ -1,0 +1,50 @@
+# Render Blueprint: oyun sunucusu (Docker) + PostgreSQL. Render bu dosyadan ikisini birlikte kurar.
+# Kurulum: https://render.com/deploy?repo=https://github.com/selimcangursu4/captain_cat → "Apply".
+# "sync: false" değerleri kurulum sırasında Render panelinde sorulur (gizli bilgiler depoya yazılmaz).
+#
+# Ücretsiz plan uyarısı: ücretsiz web servisi 15 dakika boş kalınca uyur (ilk istek ~1 dakika sürer) ve
+# ücretsiz veritabanı 30 gün sonra silinir. Mağaza incelemesinden önce panelden web servisini "Starter",
+# veritabanını "Basic" plana geçirin; aksi halde inceleme sırasında oyun sunucuya bağlanamayabilir.
+services:
+  - type: web
+    name: kaptan-pati-server
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: kaptan-pati-db
+          property: connectionString
+      # Yayında geliştirici komutları ve doğrulamasız deneme alımları KAPALI.
+      - key: DEV_COMMANDS
+        value: "0"
+      # Android (https://localhost) ve iOS (capacitor://localhost) uygulamalarının kaynakları.
+      - key: CORS_ORIGINS
+        value: https://localhost,capacitor://localhost
+      - key: SESSION_DAYS
+        value: "90"
+      - key: RATE_LIMIT_REGISTER_PER_HOUR
+        value: "5"
+      - key: RATE_LIMIT_LOGIN_PER_10MIN
+        value: "10"
+      # Gizlilik politikası ve destek sayfasında görünür (mağaza incelemesi için gerekli).
+      - key: SUPPORT_EMAIL
+        sync: false
+      - key: OPERATOR_NAME
+        sync: false
+      # RevenueCat gizli anahtarı (sk_…); RevenueCat kurulunca eklenir, şimdilik boş bırakılabilir.
+      - key: REVENUECAT_SECRET_KEY
+        sync: false
+
+databases:
+  - name: kaptan-pati-db
+    plan: free
+    region: frankfurt
+    databaseName: kaptan_pati
+    user: kaptan
+    postgresMajorVersion: "17"
+    # Yalnızca Render içinden erişilir (internete açık değil).
+    ipAllowList: []
