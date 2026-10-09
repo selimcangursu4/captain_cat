@@ -1,3 +1,5 @@
+import { Capacitor } from '@capacitor/core';
+import { SplashScreen } from '@capacitor/splash-screen';
 import Phaser from 'phaser';
 import { TEXTURES } from '../assets/AssetManifest';
 import { buildSvgTextures, ensureTextures, queueFileAssets } from '../assets/loadAssets';
@@ -29,6 +31,7 @@ export class BootScene extends Phaser.Scene {
     ensureTextures(this, [TEXTURES.background, TEXTURES.captain])
       .then(async () => {
         const progress = this.showSplash();
+        hideNativeSplash();
         await Promise.all([
           buildSvgTextures(this, progress),
           waitMs(this, SPLASH_MIN_MS),
@@ -38,6 +41,7 @@ export class BootScene extends Phaser.Scene {
       })
       .catch((error: unknown) => {
         console.error(error);
+        hideNativeSplash();
         const { width, height } = this.scale;
         this.add
           .text(width / 2, height / 2, t('app.loadError'), { fontFamily: FONT_FAMILY, fontSize: '56px', color: UI_COLORS.titleText })
@@ -114,4 +118,13 @@ export class BootScene extends Phaser.Scene {
       goToScene(this, SCENES.home);
     }
   }
+}
+
+/**
+ * Telefonda (Capacitor) uygulamanın yerel açılış ekranı kendiliğinden kapanmaz (capacitor.config.ts
+ * launchAutoHide: false): oyunun kendi açılış ekranı çizilince burada kapatılır, arada boş ekran görünmez.
+ */
+function hideNativeSplash(): void {
+  if (!Capacitor.isNativePlatform()) return;
+  SplashScreen.hide({ fadeOutDuration: 250 }).catch(() => undefined);
 }

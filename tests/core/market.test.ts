@@ -4,7 +4,7 @@ import { en } from '../../src/i18n/en';
 import { tr } from '../../src/i18n/tr';
 import { goldCostOf, marketBundle, missingMaterials, starCostOf, starValue } from '../../src/meta/pricing';
 import { PRODUCT_IDS, applyPurchase, canBreakPiggy, productGrant } from '../../src/meta/purchases';
-import { mergeBundles, rollChest } from '../../src/meta/rewards';
+import { chestOdds, mergeBundles, rollChest } from '../../src/meta/rewards';
 import { MemorySaveStorage, SaveService, emptyMaterials } from '../../src/services/SaveService';
 
 describe('fiyatlar', () => {
@@ -93,6 +93,22 @@ describe('sandıklar', () => {
       expect(ratio, chest).toBeGreaterThan(0.85);
       expect(ratio, chest).toBeLessThan(1.6);
     }
+  });
+
+  it('olasılıklar satın almadan önce gösterilir: her ödül türü, toplamı 100', () => {
+    for (const chest of CHEST_IDS) {
+      const odds = chestOdds(chest);
+      expect(odds.reduce((sum, o) => sum + o.percent, 0), chest).toBe(100);
+      expect(new Set(odds.map((o) => o.kind)).size).toBe(odds.length);
+      expect(odds.map((o) => o.kind).sort()).toEqual([...new Set(ECONOMY.chests[chest].drops.map((d) => d.kind))].sort());
+    }
+    expect(chestOdds('captain')).toEqual([
+      { kind: 'material', percent: 40 },
+      { kind: 'coins', percent: 25 },
+      { kind: 'item', percent: 20 },
+      { kind: 'lives', percent: 10 },
+      { kind: 'stars', percent: 5 },
+    ]);
   });
 
   it('ödül paketleri toplanır', () => {

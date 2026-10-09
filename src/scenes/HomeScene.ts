@@ -9,7 +9,7 @@ import { levelReward, nextChestLevel } from '../meta/levelRewards';
 import { dailyReward, levelProgress, lives, townProgress } from '../meta/progress';
 import { TOWN, getTask, recipeEntries, type TownRegion, type TownTask } from '../meta/town';
 import type { FinishResult } from '../meta/TownProgress';
-import { logout } from '../net/account';
+import { deleteAccount, logout } from '../net/account';
 import { retryPendingPurchases } from '../net/purchases';
 import { dispatch } from '../net/sync';
 import { audio } from '../services/Audio';
@@ -29,7 +29,7 @@ import { showConfirm, showDailyReward, showLevelChest, showLives, showSettings }
 import { prepareLevelStart } from '../ui/popups/levelStart';
 import { showMarket, showShop, type MarketTab } from '../ui/popups/marketPopups';
 import { waitMs } from '../ui/tweens';
-import { SCENES, fadeInScene, goToScene, type GameSceneData, type HomeSceneData } from './keys';
+import { SCENES, fadeInScene, goToScene, type AuthSceneData, type GameSceneData, type HomeSceneData } from './keys';
 
 const DEPTH = { ui: 20, bubble: 60 } as const;
 const GIFT_BAR = { width: 380, height: 40 } as const;
@@ -514,6 +514,28 @@ export class HomeScene extends Phaser.Scene {
         return;
       }
       showToast(this, t('account.logoutPending'));
+    }
+    if (choice === 'createAccount') {
+      const data: AuthSceneData = { mode: 'upgrade' };
+      goToScene(this, SCENES.auth, data);
+      return;
+    }
+    if (choice === 'deleteAccount') {
+      const confirmed = await showConfirm(this, {
+        title: t('deleteAccount.title'),
+        message: t('deleteAccount.warning'),
+        confirm: t('deleteAccount.confirm'),
+      });
+      if (confirmed) {
+        try {
+          await deleteAccount();
+          const data: AuthSceneData = { message: t('deleteAccount.done') };
+          goToScene(this, SCENES.auth, data);
+          return;
+        } catch {
+          showToast(this, t('deleteAccount.offline'));
+        }
+      }
     }
     if (choice === 'reset') {
       const confirmed = await showConfirm(this, { title: t('reset.title'), message: t('reset.warning'), confirm: t('reset.confirm') });

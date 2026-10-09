@@ -3,9 +3,11 @@ import type { SaveData } from '../../src/services/SaveService';
 
 export interface UserRecord {
   readonly id: string;
-  readonly email: string;
+  /** Misafir hesapta null. */
+  readonly email: string | null;
   readonly displayName: string;
-  readonly passwordHash: string;
+  /** Misafir hesapta null. */
+  readonly passwordHash: string | null;
   readonly createdAt: Date;
 }
 
@@ -44,6 +46,12 @@ export interface LevelRow {
   readonly data: unknown;
 }
 
+export interface NewUser {
+  readonly email: string | null;
+  readonly displayName: string;
+  readonly passwordHash: string | null;
+}
+
 export class EmailTakenError extends Error {
   constructor() {
     super('Bu e-postayla zaten bir hesap var');
@@ -55,8 +63,12 @@ export class EmailTakenError extends Error {
  * testlerde bellek (MemoryStore). Böylece sunucu testleri veritabanı olmadan çalışır.
  */
 export interface Store {
-  /** Hesabı ilk kaydıyla birlikte oluşturur; e-posta varsa EmailTakenError. */
-  createUser(input: { email: string; displayName: string; passwordHash: string }, save: SaveData): Promise<UserRecord>;
+  /** Hesabı ilk kaydıyla birlikte oluşturur (misafirde e-posta/şifre null); e-posta varsa EmailTakenError. */
+  createUser(input: NewUser, save: SaveData): Promise<UserRecord>;
+  /** Misafir hesabı e-posta ve şifreyle kaydeder (ilerleme aynı hesapta kalır); e-posta varsa EmailTakenError. */
+  registerGuest(userId: string, input: { email: string; displayName: string; passwordHash: string }): Promise<UserRecord>;
+  /** Hesabı ve ona bağlı her şeyi (oturumlar, kayıt, komut günlüğü, satın almalar) kalıcı olarak siler. */
+  deleteUser(userId: string): Promise<void>;
   findUserByEmail(email: string): Promise<UserRecord | null>;
   findUserById(id: string): Promise<UserRecord | null>;
   markLogin(userId: string, at: Date): Promise<void>;
@@ -91,8 +103,8 @@ export class MemoryStore implements Store {
   readonly purchases = new Map<string, PurchaseRecord & { userId: string }>();
   readonly levels = new Map<number, unknown>();
 
-  async createUser(input: { email: string; displayName: string; passwordHash: string }, save: SaveData): Promise<UserRecord> {
-    if ([...this.users.values()].some((u) => u.email === input.email)) throw new EmailTakenError();
+  async createUser(input: NewUser, save: SaveData): Promise<UserRecord> {
+    if (input.email !== null && [...this.users.values()].some((u) => u.email === input.email)) throw new EmailTakenError();
     const user: UserRecord = { id: randomUUID(), createdAt: new Date(), ...input };
     this.users.set(user.id, user);
     this.saves.set(user.id, { data: structuredClone(save), revision: 0 });
@@ -105,6 +117,21 @@ export class MemoryStore implements Store {
 
   async findUserById(id: string): Promise<UserRecord | null> {
     return this.users.get(id) ?? null;
+  }
+
+  async registerGuest(userId: string, input: { email: string; displayName: string; passwordHash: string }): Promise<UserRecord> {
+    if ([...this.users.values()].some((u) => u.email === input.email)) throw new EmailTakenError();
+    const user = { ...this.users.get(userId)!, ...input };
+    this.users.set(userId, user);
+    return user;
+  }
+
+  async deleteUser(userId: string): Promise<void> {
+    this.users.delete(userId);
+    this.saves.delete(userId);
+    for (const [hash, session] of this.sessions) if (session.userId === userId) this.sessions.delete(hash);
+    for (const [id, purchase] of this.purchases) if (purchase.userId === userId) this.purchases.delete(id);
+    for (let i = this.events.length - 1; i >= 0; i--) if (this.events[i].userId === userId) this.events.splice(i, 1);
   }
 
   async markLogin(): Promise<void> {}

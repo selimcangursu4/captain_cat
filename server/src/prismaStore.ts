@@ -5,6 +5,7 @@ import {
   EmailTakenError,
   type EventRecord,
   type LevelRow,
+  type NewUser,
   type PurchaseOutcome,
   type PurchaseRecord,
   type SaveRecord,
@@ -28,7 +29,7 @@ export class PrismaStore implements Store {
     return new PrismaStore(db);
   }
 
-  async createUser(input: { email: string; displayName: string; passwordHash: string }, save: SaveData): Promise<UserRecord> {
+  async createUser(input: NewUser, save: SaveData): Promise<UserRecord> {
     try {
       return await this.db.user.create({
         data: {
@@ -48,6 +49,20 @@ export class PrismaStore implements Store {
 
   findUserById(id: string): Promise<UserRecord | null> {
     return this.db.user.findUnique({ where: { id } });
+  }
+
+  async registerGuest(userId: string, input: { email: string; displayName: string; passwordHash: string }): Promise<UserRecord> {
+    try {
+      return await this.db.user.update({ where: { id: userId }, data: input });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new EmailTakenError();
+      throw error;
+    }
+  }
+
+  async deleteUser(userId: string): Promise<void> {
+    // Oturum, kayıt, komut günlüğü ve satın almalar ilişkide "onDelete: Cascade" ile birlikte silinir.
+    await this.db.user.deleteMany({ where: { id: userId } });
   }
 
   async markLogin(userId: string, at: Date): Promise<void> {

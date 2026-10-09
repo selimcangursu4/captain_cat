@@ -11,6 +11,8 @@ export const SCENES = {
 export interface AuthSceneData {
   /** Giriş ekranında gösterilecek bilgi (ör. "Oturumun sona erdi"). */
   readonly message?: string;
+  /** 'upgrade': misafir hesabı e-postayla kaydetme (ayarlardan gelinir). */
+  readonly mode?: 'login' | 'register' | 'upgrade';
 }
 
 export interface GameSceneData {

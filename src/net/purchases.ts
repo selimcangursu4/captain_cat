@@ -56,6 +56,20 @@ function storeMode(): StoreMode {
   return import.meta.env.DEV ? 'sandbox' : 'none';
 }
 
+/** Uygulamanın çalıştığı mağaza (metinlerde yalnızca o mağazanın adı geçer: App Store 2.3.10). */
+export function storePlatform(): 'android' | 'ios' | 'web' {
+  const platform = Capacitor.getPlatform();
+  return platform === 'android' || platform === 'ios' ? platform : 'web';
+}
+
+/**
+ * Fiyatlar mağazadan mı gelmeli? Telefonda yalnızca mağazanın yerel fiyatı gösterilir (yazılı yedek
+ * fiyat gösterilmez: para birimi ve vergi ülkeye göre değişir); tarayıcıda yedek fiyatlar kullanılır.
+ */
+export function usesStorePrices(): boolean {
+  return storeMode() === 'native';
+}
+
 /** Mağazada satın alma yapılabilir mi? (Değilse mağaza düğmeleri bilgi verir.) */
 export function purchasesAvailable(): boolean {
   return storeMode() !== 'none';

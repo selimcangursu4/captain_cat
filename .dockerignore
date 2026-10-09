@@ -1,0 +1,14 @@
+node_modules
+dist
+android
+ios
+assets
+store
+docs
+coverage
+server/generated
+.env
+.env.*
+!.env.example
+*.log
+.git

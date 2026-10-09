@@ -1,5 +1,5 @@
 /// <reference types="node" />
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomInt, randomUUID } from 'node:crypto';
 import cors from '@fastify/cors';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { isValidEmail, isValidName, isValidPassword, normalizeEmail, normalizeName } from '../../src/meta/accountRules';
@@ -8,6 +8,7 @@ import { createGame } from '../../src/meta/game';
 import { applyPurchase, productGrant } from '../../src/meta/purchases';
 import { MemorySaveStorage, SaveService, defaultSave } from '../../src/services/SaveService';
 import type { LevelCatalog } from './levels';
+import { legalPage, type LegalInfo, type LegalPageId } from './pages';
 import type { PurchaseVerifier } from './purchases';
 import { RateLimiter, dummyPasswordHash, hashPassword, hashToken, newToken, verifyPassword } from './security';
 import { EmailTakenError, type EventRecord, type Store, type UserRecord } from './store';
@@ -21,6 +22,10 @@ export interface AppOptions {
   /** Kayıt (IP başına saatte) ve giriş (IP+e-posta başına 10 dakikada) deneme sınırları. */
   readonly registerPerHour?: number;
   readonly loginPer10Min?: number;
+  /** IP başına saatte açılabilecek misafir hesap. */
+  readonly guestPerHour?: number;
+  /** Gizlilik politikası / koşullar / destek sayfalarındaki iletişim bilgileri. */
+  readonly legal?: LegalInfo;
   /** Gerçek ödemeleri doğrulayan (RevenueCat); yoksa gerçek satın alma kabul edilmez. */
   readonly purchaseVerifier?: PurchaseVerifier | null;
   /** Doğrulamasız deneme alımlarına izin (yalnızca geliştirme). */
@@ -47,7 +52,7 @@ const MAX_COMMANDS = 500;
 /** Oturumun "son kullanım" kaydı en sık bu aralıkla güncellenir. */
 const TOUCH_INTERVAL_MS = 60 * 60_000;
 
-const publicUser = (u: UserRecord) => ({ id: u.id, email: u.email, displayName: u.displayName });
+const publicUser = (u: UserRecord) => ({ id: u.id, email: u.email, displayName: u.displayName, guest: u.email === null });
 
 /** Kayıt sunucudan okunur (eski sürüm kayıtlar da güncel biçime çevrilir). */
 const loadSave = (data: unknown) => new SaveService(new MemorySaveStorage(JSON.stringify(data ?? null)));
@@ -58,6 +63,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   const sessionMs = options.sessionDays * 24 * 60 * 60_000;
   const loginLimiter = new RateLimiter(options.loginPer10Min ?? 10, 10 * 60_000);
   const registerLimiter = new RateLimiter(options.registerPerHour ?? 5, 60 * 60_000);
+  const guestLimiter = new RateLimiter(options.guestPerHour ?? 20, 60 * 60_000);
+  const legal: LegalInfo = options.legal ?? { contactEmail: null, operator: null };
 
   const app = Fastify({ logger: options.logger ?? false, bodyLimit: 1024 * 1024 });
   await app.register(cors, { origin: options.corsOrigins, methods: ['GET', 'POST'] });
@@ -136,6 +143,73 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
       return reply.code(201).send({ token, user: publicUser(user) });
     },
   );
+
+  /**
+   * Misafir olarak oyna: kişisel bilgi istenmeden hesap açılır (App Store 5.1.1). İlerleme yine
+   * sunucuda tutulur; oyuncu istediği zaman e-postayla hesabını kaydeder (/auth/upgrade).
+   */
+  app.post('/auth/guest', async (request, reply) => {
+    if (!guestLimiter.hit(request.ip, now())) throw new HttpError(429, 'too_many_requests', 'Çok fazla misafir hesabı');
+    const displayName = `Kaptan${randomInt(1000, 10_000)}`;
+    const user = await store.createUser({ email: null, displayName, passwordHash: null }, defaultSave(randomBytes(4).readUInt32LE(0)));
+    const token = await openSession(user, request);
+    return reply.code(201).send({ token, user: publicUser(user) });
+  });
+
+  /** Misafir hesabı e-posta + şifreyle kaydeder; ilerleme aynı hesapta kalır. */
+  app.post<{ Body: { email: string; password: string; displayName?: string } }>(
+    '/auth/upgrade',
+    { schema: credentialsSchema },
+    async (request) => {
+      const { userId } = await requireUser(request);
+      const current = await store.findUserById(userId);
+      if (!current) throw new HttpError(401, 'unauthorized', 'Hesap bulunamadı');
+      if (current.email !== null) throw new HttpError(409, 'already_registered', 'Hesap zaten kayıtlı');
+      const email = normalizeEmail(request.body.email);
+      const displayName = normalizeName(request.body.displayName ?? '');
+      const { password } = request.body;
+      if (!isValidEmail(email)) throw new HttpError(400, 'invalid_input', 'Geçersiz e-posta');
+      if (!isValidPassword(password)) throw new HttpError(400, 'invalid_input', 'Şifre en az 8 karakter olmalı');
+      if (!isValidName(displayName)) throw new HttpError(400, 'invalid_input', 'Kaptan adı 3-16 karakter olmalı');
+      try {
+        const user = await store.registerGuest(userId, { email, displayName, passwordHash: await hashPassword(password) });
+        return { user: publicUser(user) };
+      } catch (error) {
+        if (error instanceof EmailTakenError) throw new HttpError(409, 'email_taken', error.message);
+        throw error;
+      }
+    },
+  );
+
+  /** Uygulama içinden hesap silme: hesap ve ona bağlı bütün veriler kalıcı olarak silinir. */
+  app.post('/account/delete', async (request, reply) => {
+    const { userId } = await requireUser(request);
+    await store.deleteUser(userId);
+    request.log.info({ userId }, 'hesap silindi');
+    return reply.code(204).send();
+  });
+
+  /**
+   * Web'den hesap silme (Google Play "hesap silme bağlantısı"): uygulama yüklü olmasa da oyuncu
+   * e-posta ve şifresiyle hesabını siler. Girişle aynı deneme sınırı uygulanır.
+   */
+  app.post<{ Body: { email: string; password: string } }>('/account/delete-with-password', { schema: credentialsSchema }, async (request, reply) => {
+    const email = normalizeEmail(request.body.email);
+    if (!loginLimiter.hit(`${request.ip}:${email}`, now())) throw new HttpError(429, 'too_many_requests', 'Çok fazla deneme');
+    const user = await store.findUserByEmail(email);
+    const valid = await verifyPassword(request.body.password, user?.passwordHash ?? (await dummyPasswordHash()));
+    if (!user || !valid) throw new HttpError(401, 'invalid_credentials', 'E-posta ya da şifre yanlış');
+    await store.deleteUser(user.id);
+    return reply.code(204).send();
+  });
+
+  /** Gizlilik politikası, kullanım koşulları, destek ve hesap silme sayfaları (mağaza bağlantıları). */
+  for (const page of ['privacy', 'terms', 'support', 'delete-account'] as const satisfies readonly LegalPageId[]) {
+    app.get<{ Querystring: { lang?: string } }>(`/${page}`, async (request, reply) => {
+      const lang = request.query.lang === 'en' ? 'en' : 'tr';
+      return reply.type('text/html; charset=utf-8').header('Cache-Control', 'public, max-age=3600').send(legalPage(page, lang, legal));
+    });
+  }
 
   app.post<{ Body: { email: string; password: string } }>('/auth/login', { schema: credentialsSchema }, async (request) => {
     const email = normalizeEmail(request.body.email);

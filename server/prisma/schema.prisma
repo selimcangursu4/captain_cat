@@ -9,13 +9,14 @@ datasource db {
   provider = "postgresql"
 }
 
-/// Oyuncu hesabı. E-posta küçük harfe çevrilerek saklanır.
+/// Oyuncu hesabı. E-posta küçük harfe çevrilerek saklanır. Misafir hesapta e-posta ve şifre yoktur
+/// (kişisel bilgi istenmeden oynanır); oyuncu sonradan e-postayla hesabını kaydedebilir.
 model User {
   id           String      @id @default(uuid()) @db.Uuid
-  email        String      @unique
+  email        String?     @unique
   displayName  String
   /// scrypt özeti: "scrypt$N$r$p$tuz$özet" (şifrenin kendisi asla saklanmaz)
-  passwordHash String
+  passwordHash String?
   createdAt    DateTime    @default(now())
   lastLoginAt  DateTime?
   sessions     Session[]

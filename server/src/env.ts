@@ -15,6 +15,9 @@ export interface ServerConfig {
   readonly loginPer10Min: number;
   /** RevenueCat gizli anahtarı (sk_…): gerçek ödemeleri doğrulamak için. Yoksa gerçek alım kabul edilmez. */
   readonly revenueCatSecretKey: string | null;
+  /** Gizlilik politikası ve destek sayfalarındaki iletişim e-postası ve işletmeci adı (yayında zorunlu). */
+  readonly supportEmail: string | null;
+  readonly operatorName: string | null;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -35,5 +38,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     registerPerHour: Number(env.RATE_LIMIT_REGISTER_PER_HOUR ?? 5),
     loginPer10Min: Number(env.RATE_LIMIT_LOGIN_PER_10MIN ?? 10),
     revenueCatSecretKey: env.REVENUECAT_SECRET_KEY?.trim() || null,
+    supportEmail: env.SUPPORT_EMAIL?.trim() || null,
+    operatorName: env.OPERATOR_NAME?.trim() || null,
   };
 }

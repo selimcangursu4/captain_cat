@@ -1,7 +1,7 @@
 {
   "name": "kaptan-pati",
   "private": true,
-  "version": "0.9.0",
+  "version": "1.0.0",
   "description": "Kaptan Pati — liman kasabası temalı 3'lü eşleştirme oyunu",
   "type": "module",
   "scripts": {
@@ -21,13 +21,21 @@
     "db:seed": "tsx server/src/seed.ts",
     "db:studio": "prisma studio",
     "server": "tsx watch server/src/index.ts",
-    "server:start": "tsx server/src/index.ts"
+    "server:start": "tsx server/src/index.ts",
+    "assets": "tsx tools/make-app-assets.ts && capacitor-assets generate --android --ios --iconBackgroundColor \"#0b4f79\" --iconBackgroundColorDark \"#0b4f79\" --splashBackgroundColor \"#0b4f79\" --splashBackgroundColorDark \"#0b4f79\"",
+    "mobile:check": "node tools/check-mobile-env.mjs",
+    "mobile:build": "node tools/check-mobile-env.mjs && npm run build && cap sync",
+    "android:dev": "node tools/android.mjs dev",
+    "android:release": "node tools/android.mjs release",
+    "android:keystore": "node tools/android.mjs keystore",
+    "screenshot": "node tools/store-screenshot.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.3",
     "@capacitor/app": "^8.1.2",
     "@capacitor/core": "^8.5.3",
     "@capacitor/haptics": "^8.0.2",
+    "@capacitor/ios": "^8.5.3",
     "@capacitor/splash-screen": "^8.0.2",
     "@capacitor/status-bar": "^8.0.4",
     "@fastify/cors": "^11.3.0",
@@ -39,6 +47,7 @@
     "phaser": "^3.90.0"
   },
   "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
     "@capacitor/cli": "^8.5.3",
     "@types/node": "^26.6.4",
     "prisma": "^7.10.0",

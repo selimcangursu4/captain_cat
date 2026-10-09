@@ -37,6 +37,23 @@ export function mergeBundles(list: readonly RewardBundle[]): RewardBundle {
   };
 }
 
+/**
+ * Sandıktaki her ödül türünün bir çekilişte çıkma olasılığı (yüzde, toplamı 100). Mağaza kuralları
+ * (App Store 3.1.1, Google Play) parayla alınan rastgele ödüllerde olasılıkların satın almadan önce
+ * gösterilmesini ister; Pazar'daki sandık kartı bunu gösterir.
+ */
+export function chestOdds(chest: ChestId): { readonly kind: ChestDrop['kind']; readonly percent: number }[] {
+  const drops = ECONOMY.chests[chest].drops;
+  const total = drops.reduce((sum, d) => sum + d.weight, 0);
+  const byKind = new Map<ChestDrop['kind'], number>();
+  for (const d of drops) byKind.set(d.kind, (byKind.get(d.kind) ?? 0) + d.weight);
+  const odds = [...byKind].map(([kind, weight]) => ({ kind, percent: Math.round((weight / total) * 100) }));
+  // Yuvarlama artığı en olası türe eklenir: toplam her zaman 100.
+  const diff = 100 - odds.reduce((sum, o) => sum + o.percent, 0);
+  if (diff !== 0) odds.reduce((a, b) => (b.percent > a.percent ? b : a)).percent += diff;
+  return odds;
+}
+
 /** Eşya açılmamışsa sandıktaki eşya yerine verilen altın (adet başına). */
 const ITEM_FALLBACK_COINS = 50;
 

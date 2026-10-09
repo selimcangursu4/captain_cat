@@ -11,6 +11,11 @@ export function currentUser(): SessionUser | null {
   return current?.user ?? null;
 }
 
+/** Misafir hesapla mı oynanıyor? */
+export function isGuest(): boolean {
+  return current?.user.guest === true;
+}
+
 /** Oturumun belirteci (sunucu istekleri için; yoksa null). */
 export function currentToken(): string | null {
   return current?.token ?? null;
@@ -54,6 +59,42 @@ export async function register(email: string, password: string, displayName: str
 
 export async function login(email: string, password: string): Promise<SessionUser> {
   return begin(await api<AuthResponse>('/auth/login', { body: { email, password } }));
+}
+
+/** Misafir olarak oyna: e-posta ve şifre istenmez; sunucu misafir hesap açar. */
+export async function playAsGuest(): Promise<SessionUser> {
+  return begin(await api<AuthResponse>('/auth/guest', { body: {} }));
+}
+
+/** Misafir hesabı e-posta ve şifreyle kaydeder; ilerleme aynı hesapta kalır. */
+export async function upgradeAccount(email: string, password: string, displayName: string): Promise<SessionUser> {
+  if (!current) throw new Error('Giriş yapılmamış');
+  const { token } = current;
+  const res = await api<{ user: SessionUser }>('/auth/upgrade', { body: { email, password, displayName }, token });
+  current = { token, user: res.user };
+  storeSession(current);
+  return res.user;
+}
+
+/**
+ * Hesabı kalıcı olarak siler (sunucudaki hesap, ilerleme, işlem günlüğü ve satın alma kayıtları).
+ * İnternet gerekir; başarılıysa telefondaki kayıt, günlük ve oturum da silinir.
+ */
+export async function deleteAccount(): Promise<void> {
+  if (!current) return;
+  const { token, user } = current;
+  await api('/account/delete', { body: {}, token });
+  sync.detach();
+  for (const key of [userSaveKey(user.id), `kaptan-pati/journal/${user.id}`, `kaptan-pati/sync/${user.id}`, `kaptan-pati/purchases/${user.id}`]) {
+    try {
+      globalThis.localStorage?.removeItem(key);
+    } catch {
+      // Depolama kapalıysa yapacak bir şey yok; oturum yine de silinir.
+    }
+  }
+  storeSession(null);
+  current = null;
+  saveService.useStorage(new MemorySaveStorage());
 }
 
 /**

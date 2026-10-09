@@ -3,8 +3,11 @@ import { LocalStorageSaveStorage } from '../services/SaveService';
 /** Giriş yapmış hesap (kayıt ve giriş yanıtındaki kullanıcı). */
 export interface SessionUser {
   readonly id: string;
-  readonly email: string;
+  /** Misafir hesapta null. */
+  readonly email: string | null;
   readonly displayName: string;
+  /** Misafir hesap: e-posta/şifre yok; oyuncu istediği zaman hesabını kaydeder. */
+  readonly guest?: boolean;
 }
 
 /**

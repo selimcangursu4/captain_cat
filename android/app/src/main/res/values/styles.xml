@@ -18,5 +18,7 @@
 
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
         <item name="android:background">@drawable/splash</item>
+        <!-- Android 12+: sistem açılış ekranı oyunun deniz mavisiyle (ortada uygulama simgesi). -->
+        <item name="windowSplashScreenBackground">#0B4F79</item>
     </style>
 </resources>

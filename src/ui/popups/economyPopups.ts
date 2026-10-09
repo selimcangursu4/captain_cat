@@ -11,7 +11,8 @@ import { inventory, lives } from '../../meta/progress';
 import { audio } from '../../services/Audio';
 import { settings } from '../../services/Settings';
 import { wallet } from '../../services/Wallet';
-import { currentUser } from '../../net/account';
+import { currentUser, isGuest } from '../../net/account';
+import { legalUrl, openExternal, type LegalPage } from '../../net/links';
 import { dispatch, sync, type SyncStatus } from '../../net/sync';
 import { formatCountdown } from '../components/CounterPill';
 import { Popup } from '../components/Popup';
@@ -409,32 +410,35 @@ function syncStatusText(status: SyncStatus): [string, string] {
   }
 }
 
+export type SettingsChoice = 'language' | 'logout' | 'reset' | 'createAccount' | 'deleteAccount' | null;
+
 /**
- * Ayarlar: ses, müzik, titreşim, dil ve hesap (ad, e-posta, eşitleme durumu, çıkış, kaydı sıfırlama).
- * 'language': dil değişti (çağıran sahne metinleri yenilemek için kendini yeniden başlatır);
- * 'logout': oyuncu çıkış istedi; 'reset': kaydı sıfırlamak istedi (onay ayrıca sorulur); null: kapatıldı.
+ * Ayarlar: ses, müzik, titreşim, dil ve hesap (ad, e-posta ya da misafir durumu, eşitleme durumu,
+ * çıkış ya da hesabı kaydetme, kaydı sıfırlama, hesabı silme) ve gizlilik/koşullar/destek bağlantıları.
+ * 'language': dil değişti (çağıran sahne kendini yeniden başlatır); diğerleri oyuncunun seçtiği eylem
+ * (sıfırlama ve silme için onay ayrıca sorulur); null: kapatıldı.
  */
-export function showSettings(scene: Phaser.Scene): Promise<'language' | 'logout' | 'reset' | null> {
+export function showSettings(scene: Phaser.Scene): Promise<SettingsChoice> {
   return new Promise((resolve) => {
     let stopListening = () => undefined as unknown;
-    const finish = (result: 'language' | 'logout' | 'reset' | null) => {
+    const finish = (result: SettingsChoice) => {
       stopListening();
       void popup.close().then(() => resolve(result));
     };
-    const popup = new Popup(scene, { title: t('settings.title'), height: 1360, onClose: () => finish(null) });
+    const popup = new Popup(scene, { title: t('settings.title'), height: 1640, onClose: () => finish(null) });
     const rows = [
       ['settings.sound', 'sound'],
       ['settings.music', 'music'],
       ['settings.vibration', 'vibration'],
     ] as const;
     rows.forEach(([key, setting], i) => {
-      const y = -440 + i * 115;
+      const y = -610 + i * 110;
       const name = scene.add
         .text(-330, y, t(key), { fontFamily: FONT_FAMILY, fontSize: '44px', fontStyle: '700', color: INK })
         .setOrigin(0, 0.5);
       popup.content.add([name, new Toggle(scene, 250, y, settings[setting], (on) => settings.setToggle(setting, on))]);
     });
-    popup.content.add(label(scene, 0, -95, t('settings.language'), 44));
+    popup.content.add(label(scene, 0, -285, t('settings.language'), 44));
     const languages: [Language, string][] = [
       ['tr', 'Türkçe'],
       ['en', 'English'],
@@ -444,25 +448,26 @@ export function showSettings(scene: Phaser.Scene): Promise<'language' | 'logout'
       const button = new TextButton(
         scene,
         (i - 0.5) * 320,
-        5,
+        -190,
         name,
         () => {
           if (current) return;
           settings.setLanguage(language);
           finish('language');
         },
-        { width: 290, height: 100, fontSize: 40, variant: current ? 'green' : 'orange' },
+        { width: 290, height: 96, fontSize: 40, variant: current ? 'green' : 'orange' },
       );
       popup.content.add(button);
     });
 
     // Hesap
-    popup.content.add(scene.add.graphics().lineStyle(4, 0xd9a066, 0.8).lineBetween(-340, 100, 340, 100));
+    popup.content.add(scene.add.graphics().lineStyle(4, 0xd9a066, 0.8).lineBetween(-340, -110, 340, -110));
     const user = currentUser();
-    popup.content.add(label(scene, 0, 160, t('account.title'), 44));
-    popup.content.add(label(scene, 0, 225, user?.displayName ?? '-', 40, '#2e86de'));
-    popup.content.add(label(scene, 0, 275, user?.email ?? '', 30, '#8a7a6a'));
-    const status = label(scene, 0, 330, '', 30);
+    const guest = isGuest();
+    popup.content.add(label(scene, 0, -60, t('account.title'), 44));
+    popup.content.add(label(scene, 0, 0, user?.displayName ?? '-', 40, '#2e86de'));
+    popup.content.add(label(scene, 0, 52, guest ? t('account.guest') : (user?.email ?? ''), 28, guest ? '#b07800' : '#8a7a6a', 760));
+    const status = label(scene, 0, 104, '', 28);
     popup.content.add(status);
     const showStatus = (s: SyncStatus) => {
       const [text, color] = syncStatusText(s);
@@ -470,19 +475,34 @@ export function showSettings(scene: Phaser.Scene): Promise<'language' | 'logout'
     };
     showStatus(sync.state);
     stopListening = sync.onStatus(showStatus);
+    const half = { width: 370, height: 96, fontSize: 36 };
+    // Misafir çıkış yaparsa hesabına bir daha giremez: çıkış yerine hesabı kaydetme sunulur.
     popup.content.add(
-      new TextButton(scene, -195, 430, t('account.logout'), () => finish('logout'), { width: 370, height: 96, fontSize: 36 }),
+      guest
+        ? new TextButton(scene, -195, 205, t('account.createAccount'), () => finish('createAccount'), { ...half, variant: 'green' })
+        : new TextButton(scene, -195, 205, t('account.logout'), () => finish('logout'), half),
     );
-    popup.content.add(
-      new TextButton(scene, 195, 430, t('account.reset'), () => finish('reset'), { width: 370, height: 96, fontSize: 36 }),
-    );
-    popup.content.add(label(scene, 0, 530, t('account.resetHint'), 26, '#8a7a6a', 720));
-    popup.content.add(label(scene, 0, 610, t('settings.version', { v: APP_VERSION }), 28, '#8a7a6a'));
+    popup.content.add(new TextButton(scene, 195, 205, t('account.reset'), () => finish('reset'), half));
+    popup.content.add(new TextButton(scene, 0, 320, t('account.delete'), () => finish('deleteAccount'), { width: 500, height: 96, fontSize: 36 }));
+    popup.content.add(label(scene, 0, 410, t('account.dangerHint'), 26, '#8a7a6a', 760));
+
+    // Gizlilik / koşullar / destek (tarayıcıda açılır).
+    const links: [I18nKey, LegalPage][] = [
+      ['account.privacy', 'privacy'],
+      ['account.terms', 'terms'],
+      ['account.support', 'support'],
+    ];
+    links.forEach(([key, page], i) => {
+      const link = label(scene, (i - 1) * 240, 500, t(key), 32, '#2e86de').setInteractive({ useHandCursor: true });
+      link.on('pointerup', () => openExternal(legalUrl(page)));
+      popup.content.add(link);
+    });
+    popup.content.add(label(scene, 0, 575, t('settings.version', { v: APP_VERSION }), 28, '#8a7a6a'));
     void popup.open();
   });
 }
 
-/** Geri alınamaz işlem onayı (kaydı sıfırlama). Onaylanırsa true. */
+/** Geri alınamaz işlem onayı (kaydı sıfırlama, hesabı silme). Onaylanırsa true. */
 export function showConfirm(scene: Phaser.Scene, options: { title: string; message: string; confirm: string }): Promise<boolean> {
   return new Promise((resolve) => {
     const finish = (value: boolean) => void popup.close().then(() => resolve(value));

@@ -104,6 +104,83 @@ describe('hesap', () => {
   });
 });
 
+describe('misafir hesap ve hesap silme', () => {
+  it('misafir: kişisel bilgi istenmeden hesap açılır, oynanır ve sonra e-postayla kaydedilir (ilerleme korunur)', async () => {
+    await setup();
+    const res = await post('/auth/guest', {});
+    expect(res.statusCode).toBe(201);
+    const { token, user } = res.json();
+    expect(user).toMatchObject({ email: null, guest: true });
+    expect(user.displayName).toMatch(/^Kaptan\d{4}$/);
+    const t0 = clock.now;
+    await post('/sync', { commands: [{ type: 'startLevel', level: 1, boosters: [], at: t0 }, { type: 'winLevel', level: 1, coins: 20, at: t0 + 60_000 }] }, token);
+    const upgraded = await post('/auth/upgrade', { email: 'Misafir@Example.com', password: 'denizfeneri1', displayName: 'Pati Reis' }, token);
+    expect(upgraded.statusCode).toBe(200);
+    expect(upgraded.json().user).toMatchObject({ id: user.id, email: 'misafir@example.com', displayName: 'Pati Reis', guest: false });
+    // Aynı hesap: ilerleme duruyor; artık e-postayla başka cihazdan girilir.
+    const login = (await post('/auth/login', { email: 'misafir@example.com', password: 'denizfeneri1' })).json();
+    expect((await get('/save', login.token)).json().save.level).toBe(2);
+    expect((await post('/auth/upgrade', { email: 'x@example.com', password: 'denizfeneri1', displayName: 'Başka' }, token)).statusCode).toBe(409);
+  });
+
+  it('misafir hesabı başkasının e-postasıyla kaydedilemez; geçersiz alanlar reddedilir', async () => {
+    await setup();
+    await registerUser('kaptan@example.com');
+    const { token } = (await post('/auth/guest', {})).json();
+    expect((await post('/auth/upgrade', { email: 'kaptan@example.com', password: 'denizfeneri1', displayName: 'Pati' }, token)).json().error).toBe('email_taken');
+    expect((await post('/auth/upgrade', { email: 'yeni@example.com', password: 'kisa', displayName: 'Pati' }, token)).statusCode).toBe(400);
+    expect((await post('/auth/upgrade', { email: 'yeni@example.com', password: 'denizfeneri1', displayName: 'Pati' })).statusCode).toBe(401);
+  });
+
+  it('misafir hesap açma IP başına sınırlı', async () => {
+    await setup(false, { guestPerHour: 2 });
+    expect((await post('/auth/guest', {})).statusCode).toBe(201);
+    expect((await post('/auth/guest', {})).statusCode).toBe(201);
+    expect((await post('/auth/guest', {})).statusCode).toBe(429);
+  });
+
+  it('uygulama içinden silme: hesap, kayıt, oturumlar, komut günlüğü ve satın almalar kalıcı olarak silinir', async () => {
+    await setup(true, { sandboxPurchases: true });
+    const { token, user } = await registerUser();
+    await post('/sync', { commands: [{ type: 'claimDaily', tz: 0, at: clock.now }] }, token);
+    await post('/purchases', { productId: ECONOMY.shop[0].id, sandbox: true }, token);
+    expect((await post('/account/delete', {}, token)).statusCode).toBe(204);
+    expect(store.users.has(user.id)).toBe(false);
+    expect(store.saves.has(user.id)).toBe(false);
+    expect([...store.sessions.values()].some((s) => s.userId === user.id)).toBe(false);
+    expect(store.events.some((e) => e.userId === user.id)).toBe(false);
+    expect([...store.purchases.values()].some((p) => p.userId === user.id)).toBe(false);
+    expect((await get('/me', token)).statusCode).toBe(401);
+    // Aynı e-postayla yeniden kayıt olunabilir.
+    expect((await post('/auth/register', { email: 'kaptan@example.com', password: 'denizfeneri1', displayName: 'Yeni' })).statusCode).toBe(201);
+  });
+
+  it('web\'den silme: e-posta ve şifreyle; yanlış şifreyle silinmez', async () => {
+    await setup();
+    const { user } = await registerUser();
+    expect((await post('/account/delete-with-password', { email: 'kaptan@example.com', password: 'yanlis-sifre' })).statusCode).toBe(401);
+    expect(store.users.has(user.id)).toBe(true);
+    expect((await post('/account/delete-with-password', { email: 'KAPTAN@example.com', password: 'denizfeneri1' })).statusCode).toBe(204);
+    expect(store.users.has(user.id)).toBe(false);
+  });
+
+  it('gizlilik, koşullar, destek ve hesap silme sayfaları iki dilde herkese açık', async () => {
+    await setup(false, { legal: { contactEmail: 'destek@ornek.com', operator: 'Örnek Stüdyo' } });
+    for (const page of ['privacy', 'terms', 'support', 'delete-account']) {
+      for (const lang of ['tr', 'en']) {
+        const res = await get(`/${page}?lang=${lang}`);
+        expect(res.statusCode, page).toBe(200);
+        expect(res.headers['content-type']).toContain('text/html');
+        expect(res.body).toContain(`<html lang="${lang}">`);
+        expect(res.body).toContain('destek@ornek.com');
+      }
+    }
+    expect((await get('/privacy')).body).toContain('Gizlilik Politikası');
+    expect((await get('/privacy?lang=en')).body).toContain('Privacy Policy');
+    expect((await get('/delete-account')).body).toContain('/account/delete-with-password');
+  });
+});
+
 describe('eşitleme', () => {
   it('komutlar sunucuda yeniden oynatılır; kayıt ve sürüm güncellenir; komutlar kaydedilir', async () => {
     await setup();

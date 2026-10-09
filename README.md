@@ -29,6 +29,12 @@ Aşama 10'da, gerçek ödeme Aşama 11'de.
 | `npm run balance` | Seviye dengesi raporu: bot her seviyeyi 60 kez oynar, kazanma oranlarını yazar (200 seviyede birkaç dakika) |
 | `npm run levels` | Eksik seviyeleri üretir ve hamle sayılarını botla ayarlar (bkz. "Seviye üretici") |
 | `npm run build` | Üretim derlemesi → `dist/` |
+| `npm run android:dev` | Kablolu telefona geliştirme sürümü (bilgisayardaki sunucuya USB tüneliyle bağlanır) |
+| `npm run android:release` | Google Play paketi: ayarları denetler, imzalı `.aab` üretir |
+| `npm run android:keystore` | Google Play yükleme anahtarı üretir (bir kez; yedekleyin) |
+| `npm run mobile:build` | Mağaza için web derlemesi + `cap sync` (iOS: ardından Mac'te Xcode) |
+| `npm run assets` | Simge, açılış ve mağaza görsellerini Kaptan Pati çiziminden üretir |
+| `npm run screenshot -- ad` | Kablolu telefondan mağaza boyutlarında ekran görüntüsü (`store/screenshots/`) |
 
 `?level=3` ana ekranı atlayıp doğrudan bir seviyeyi açar (başlangıç penceresi oyun ekranında çıkar),
 `?seed=123` aynı tahtayı yeniden üretir (hata bildirirken ekrandaki seviye ve tohum numarasını ekleyin).
@@ -325,8 +331,10 @@ müzik için de aynı (`MUSIC_MANIFEST`). Oyun kodu yalnızca anahtarı bilir (`
 
 ## Hesap, sunucu ve eşitleme
 
-**Hesap zorunludur** (misafir yok): oyun ilk açılışta kayıt (kaptan adı, e-posta, şifre) ya da giriş
-ister; bunun için o an internet gerekir. Oturum telefonda saklanır; sonraki açılışlarda oyun
+**Misafir olarak oynanır:** ilk açılışta "Misafir olarak oyna" kişisel bilgi istemeden sunucuda bir misafir
+hesap açar (App Store 5.1.1). Oyuncu istediği zaman Ayarlar → Hesap → "Hesabı Kaydet" ile e-posta ve
+şifresini ekler; ilerleme aynı hesapta kalır. Kayıtlı hesapla başka cihazdan giriş yapılır. İlk açılışta
+internet gerekir. Oturum telefonda saklanır; sonraki açılışlarda oyun
 **internetsiz de açılır ve oynanır**. Çıkış ayarlardan yapılır; kaydedilmemiş ilerleme varken internetsiz
 çıkışa izin verilmez (ilerleme kaybolmasın).
 
@@ -378,6 +386,11 @@ sunucunun kaydına döner. Kurallar:
 | `GET /save` | Esas kayıt |
 | `POST /sync` | Komutları gönderir, esas kaydı alır |
 | `POST /purchases` | Mağaza ödemesini doğrular, altını kayda işler |
+| `POST /auth/guest` | Misafir hesap açar (IP başına saatte 20) |
+| `POST /auth/upgrade` | Misafir hesabı e-posta + şifreyle kaydeder |
+| `POST /account/delete` | Hesabı ve bütün verilerini kalıcı olarak siler (uygulama içi) |
+| `POST /account/delete-with-password` | Web'den hesap silme (e-posta + şifre) |
+| `GET /privacy` `/terms` `/support` `/delete-account` | Gizlilik politikası, koşullar, destek, hesap silme sayfaları (`?lang=tr\|en`) |
 | `GET /levels?after=N` | Pakette olmayan yeni seviyeler |
 | `GET /health` | Sağlık |
 
@@ -385,7 +398,7 @@ sunucunun kaydına döner. Kurallar:
 
 | Tablo | İçerik |
 |---|---|
-| `User` | Hesap |
+| `User` | Hesap (misafirde e-posta ve şifre boş) |
 | `Session` | Oturum |
 | `GameSave` | Esas kayıt (JSON); sıralama için seviye, yıldız ve altın ayrı sütunlarda |
 | `GameEvent` | Komut günlüğü |
@@ -412,3 +425,15 @@ denemesi, kumbara, sandık tohumu ve kaydın saati (sürüm 6; sürüm 4-5'teki 
 - Depo `SaveStorage` arayüzünün arkasındadır: tarayıcıda localStorage, sunucuda ve testlerde bellek.
 - Bozuk veya eski kayıtlar `migrate()` ile onarılır: geçersiz alanlar varsayılana döner, oyun çökmez.
 - Kayıt biçimi değişirse `SAVE_VERSION` artırılır ve `migrate()` içine dönüşüm eklenir.
+
+## Mağazaya yayın
+
+Google Play ve App Store için gereken her şey (sunucu, RevenueCat, konsol formlarının yanıtları, mağaza
+metinleri, ekran görüntüleri) adım adım: [docs/store/YAYIN-KONTROL-LISTESI.md](docs/store/YAYIN-KONTROL-LISTESI.md).
+
+- Hesap silme uygulama içinde (Ayarlar → Hesap → Hesabımı Sil) ve web'de (`/delete-account`).
+- Sandıkların her ödül türünün olasılığı Pazar'da satın almadan önce gösterilir.
+- Mağaza paketi yalnızca HTTPS sunucuya bağlanır; `npm run mobile:check` `VITE_API_URL` ve RevenueCat
+  anahtarlarını denetler (`.env.production.example`).
+- Sunucu `Dockerfile` ile yayına alınır (yayında `DEV_COMMANDS=0`, `SUPPORT_EMAIL`, `OPERATOR_NAME`).
+- iOS projesi `ios/` altında (Swift Package Manager); derleme ve gönderme Mac'te Xcode ile yapılır.

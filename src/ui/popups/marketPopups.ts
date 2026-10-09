@@ -15,7 +15,15 @@ import { getLanguage, t, type I18nKey } from '../../i18n';
 import { marketBundle, nextShipLevel, shipBonus } from '../../meta/pricing';
 import { canBreakPiggy } from '../../meta/purchases';
 import { market, townProgress } from '../../meta/progress';
-import { buyProduct, loadStorePrices, purchasesAvailable, retryPendingPurchases, type PurchaseResult } from '../../net/purchases';
+import {
+  buyProduct,
+  loadStorePrices,
+  purchasesAvailable,
+  retryPendingPurchases,
+  storePlatform,
+  usesStorePrices,
+  type PurchaseResult,
+} from '../../net/purchases';
 import { dispatch } from '../../net/sync';
 import { audio } from '../../services/Audio';
 import { saveService } from '../../services/SaveService';
@@ -28,6 +36,7 @@ import { formatNumber } from '../format';
 import { tweenAsync, waitMs } from '../tweens';
 import { INK, label } from './levelPopups';
 import { bundleEntries, materialName, outlinedText } from './rewardViews';
+import { chestOdds } from '../../meta/rewards';
 
 const GOLD = '#b07800';
 const MUTED = '#8a7a6a';
@@ -134,7 +143,8 @@ export function showShop(scene: Phaser.Scene): Promise<void> {
         c.add(scene.add.image((k - (pile - 1) / 2) * 34, -66 - (k % 2) * 14, TEXTURES.coin).setDisplaySize(78, 78));
       }
       c.add(label(scene, 0, 5, formatNumber(pack.coins), 48, GOLD));
-      const price = pack.price[language];
+      // Telefonda fiyat mağazadan gelene kadar "…" ve düğme pasif (yanlış fiyat gösterilmez).
+      const price = usesStorePrices() ? t('shop.loadingPrice') : pack.price[language];
       const button = new TextButton(scene, 0, 82, price, () => void purchase(pack.id, button, priceButtons.get(pack.id)?.getData('price') ?? price), {
         width: 260,
         height: 80,
@@ -142,6 +152,7 @@ export function showShop(scene: Phaser.Scene): Promise<void> {
         variant: 'green',
       });
       button.setData('price', price);
+      if (usesStorePrices()) button.setEnabled(false);
       priceButtons.set(pack.id, button);
       c.add(button);
       if (pack.tag) {
@@ -165,7 +176,7 @@ export function showShop(scene: Phaser.Scene): Promise<void> {
     // Kumbara: her yeni seviyede dolar; en az minBreak birikince gerçek parayla kırılır.
     const piggy = scene.add.container(0, 410);
     popup.content.add(piggy);
-    const piggyPrice = ECONOMY.piggyBank.price[language];
+    const piggyPrice = usesStorePrices() ? t('shop.loadingPrice') : ECONOMY.piggyBank.price[language];
     let piggyButton: TextButton | null = null;
     const drawPiggy = () => {
       piggy.removeAll(true);
@@ -199,15 +210,22 @@ export function showShop(scene: Phaser.Scene): Promise<void> {
     };
     drawPiggy();
 
-    const note = !purchasesAvailable() ? t('shop.unavailable') : import.meta.env.DEV ? t('shop.sandbox') : t('shop.secure');
+    const platform = storePlatform();
+    const note = !purchasesAvailable()
+      ? t('shop.unavailable')
+      : platform === 'ios'
+        ? t('shop.secureIos')
+        : platform === 'android'
+          ? t('shop.secureAndroid')
+          : t('shop.sandbox');
     popup.content.add(label(scene, 0, 610, note, 26, MUTED, 820));
 
     // Mağazanın yerel fiyatları (yüklenemezse yedek fiyatlar kalır) ve bekleyen ödemeler.
     void loadStorePrices().then((prices) => {
       if (!popup.content.active) return;
       for (const [id, button] of priceButtons) {
-        if (!prices[id]) continue;
-        button.setData('price', prices[id]).setLabel(prices[id]);
+        if (prices[id]) button.setData('price', prices[id]).setLabel(prices[id]).setEnabled(true);
+        else if (usesStorePrices()) button.setData('price', t('shop.noPrice')).setLabel(t('shop.noPrice'));
       }
       if (prices[ECONOMY.piggyBank.productId] && piggyButton) {
         piggyButton.setData('price', prices[ECONOMY.piggyBank.productId]);
@@ -354,8 +372,7 @@ export function showMarket(scene: Phaser.Scene, initial: MarketTab = 'materials'
             body.add(leftText(scene, gx + 28, y + 2, amount, 26, INK));
           });
         }
-        // Çıkabilecekler: simge şeridi.
-        const kinds = [...new Set(config.drops.map((d) => d.kind))];
+        // Her ödül türünün olasılığı satın almadan önce gösterilir (mağaza kuralı).
         const textures: Record<string, string> = {
           material: materialTexture('wood'),
           coins: TEXTURES.coin,
@@ -363,8 +380,12 @@ export function showMarket(scene: Phaser.Scene, initial: MarketTab = 'materials'
           lives: TEXTURES.heart,
           stars: TEXTURES.star,
         };
-        body.add(leftText(scene, -200, y + 52, t('chest.contains'), 26, MUTED));
-        kinds.forEach((kind, k) => body.add(scene.add.image(-200 + 27 + k * 64, y + 102, textures[kind]).setDisplaySize(54, 54)));
+        body.add(leftText(scene, -200, y + 48, t('chest.odds', { n: config.rolls }), 24, MUTED));
+        chestOdds(id).forEach(({ kind, percent }, k) => {
+          const x = -200 + 30 + k * 76;
+          body.add(scene.add.image(x, y + 92, textures[kind]).setDisplaySize(50, 50));
+          body.add(label(scene, x, y + 130, t('chest.percent', { n: percent }), 24, INK));
+        });
         body.add(
           new TextButton(scene, 300, y + 85, formatNumber(config.price), () => void openChest(id), {
             width: 230,

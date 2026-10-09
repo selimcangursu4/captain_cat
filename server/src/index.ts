@@ -39,7 +39,11 @@ async function main(): Promise<void> {
     loginPer10Min: config.loginPer10Min,
     purchaseVerifier: config.revenueCatSecretKey ? new RevenueCatVerifier(config.revenueCatSecretKey) : null,
     sandboxPurchases: config.devCommands,
+    legal: { contactEmail: config.supportEmail, operator: config.operatorName },
   });
+  if (!config.supportEmail || !config.operatorName) {
+    console.warn('UYARI: SUPPORT_EMAIL / OPERATOR_NAME tanımlı değil. Gizlilik politikası ve destek sayfası mağaza incelemesi için bunları göstermeli.');
+  }
   await app.listen({ port: config.port, host: '0.0.0.0' });
   console.log(
     `Kaptan Pati sunucusu: http://localhost:${config.port} · ${catalog.count} seviye · geliştirici komutları ${config.devCommands ? 'açık' : 'kapalı'} · ödeme doğrulama ${config.revenueCatSecretKey ? 'açık' : 'kapalı'}`,

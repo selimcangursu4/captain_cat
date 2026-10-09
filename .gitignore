@@ -4,7 +4,13 @@ coverage/
 *.log
 .DS_Store
 .vite/
-# Sunucu sırları (örnek: .env.example)
+# Sunucu ve mağaza paketi sırları (örnekler: .env.example, .env.production.example)
 .env
+.env.local
+.env.*.local
+.env.production
 # Prisma'nın ürettiği istemci (npm run db:generate)
 server/generated/
+# Mağaza paketleri
+*.aab
+*.ipa
