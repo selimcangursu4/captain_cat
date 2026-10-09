@@ -37,7 +37,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     sessionDays: Number(env.SESSION_DAYS ?? 90),
     registerPerHour: Number(env.RATE_LIMIT_REGISTER_PER_HOUR ?? 5),
     loginPer10Min: Number(env.RATE_LIMIT_LOGIN_PER_10MIN ?? 10),
-    revenueCatSecretKey: env.REVENUECAT_SECRET_KEY?.trim() || null,
+    // RevenueCat gizli anahtarları "sk_" ile başlar; boş ya da yer tutucu ("yok") değer anahtar yok sayılır.
+    revenueCatSecretKey: env.REVENUECAT_SECRET_KEY?.trim().startsWith('sk_') ? env.REVENUECAT_SECRET_KEY.trim() : null,
     supportEmail: env.SUPPORT_EMAIL?.trim() || null,
     operatorName: env.OPERATOR_NAME?.trim() || null,
   };
